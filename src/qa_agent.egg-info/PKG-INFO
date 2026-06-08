@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: qa-agent
+Version: 0.1.0
+Summary: Topic-managed Graph RAG Q&A web app using LangGraph and Graphify
+Requires-Python: >=3.10
