@@ -42,7 +42,7 @@ def test_collect_writes_repo_issues_and_pulls(tmp_path, monkeypatch):
                 }
             return default
 
-        def _request_pages(self, path, params=None):
+        def _request_pages(self, path, params=None, limit=None):
             if path == "/repos/acme/repo/issues":
                 return [
                     {

@@ -1,3 +1,6 @@
+import os
+import shutil
+import stat
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
@@ -9,7 +12,17 @@ from .config import Settings, get_settings
 from .graphify_client import GraphifyClient
 from .github_collector import GitHubRepositoryCollector
 from .ingestion import IngestionService
-from .models import IngestRequest, IngestResult, LlmSettings, QuestionRequest, QuestionResponse, Topic, TopicCreate
+from .models import (
+    ChatThread,
+    IngestRequest,
+    IngestResult,
+    LlmSettings,
+    QuestionRequest,
+    QuestionResponse,
+    ThreadCreate,
+    Topic,
+    TopicCreate,
+)
 from .storage import TopicStore
 
 app = FastAPI(title="QA Agent", version="0.1.0")
@@ -20,6 +33,18 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 def get_store(settings: Settings = Depends(get_settings)) -> TopicStore:
     return TopicStore(settings.database_path)
+
+
+def _handle_remove_readonly(func, path, excinfo) -> None:
+    # Git-created pack files can be read-only on Windows; clear the bit and retry.
+    if isinstance(excinfo, BaseException):
+        error = excinfo
+    else:
+        error = excinfo[1]
+    if not isinstance(error, PermissionError):
+        raise error
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
 
 
 def get_ingestion(
@@ -75,6 +100,11 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/chat")
+def chat() -> FileResponse:
+    return FileResponse(STATIC_DIR / "chat.html")
+
+
 @app.get("/api/topics", response_model=list[Topic])
 def list_topics(store: TopicStore = Depends(get_store)) -> list[Topic]:
     return store.list_topics()
@@ -98,6 +128,19 @@ def create_topic(payload: TopicCreate, store: TopicStore = Depends(get_store)) -
     return store.create_topic(payload)
 
 
+@app.get("/api/threads", response_model=list[ChatThread])
+def list_threads(topic_id: str | None = None, store: TopicStore = Depends(get_store)) -> list[ChatThread]:
+    return store.list_threads(topic_id)
+
+
+@app.post("/api/topics/{topic_id}/threads", response_model=ChatThread)
+def create_thread(topic_id: str, payload: ThreadCreate, store: TopicStore = Depends(get_store)) -> ChatThread:
+    try:
+        return store.create_thread(topic_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Topic not found") from exc
+
+
 @app.get("/api/topics/{topic_id}", response_model=Topic)
 def get_topic(topic_id: str, store: TopicStore = Depends(get_store)) -> Topic:
     try:
@@ -119,9 +162,7 @@ def delete_topic(
     store.delete_topic(topic_id)
     topic_dir = ingestion.topic_dir(topic_id)
     if topic_dir.exists():
-        import shutil
-
-        shutil.rmtree(topic_dir)
+        shutil.rmtree(topic_dir, onexc=_handle_remove_readonly)
 
 
 @app.post("/api/topics/{topic_id}/ingest", response_model=IngestResult)

@@ -1,11 +1,12 @@
 import json
 import re
+import shutil
 import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 class GitHubCollectError(RuntimeError):
@@ -17,42 +18,66 @@ class GitHubRepositoryCollector:
         self,
         *,
         token: str | None = None,
-        max_pages: int = 10,
-        per_page: int = 100,
+        max_pages: int = 2,
+        per_page: int = 50,
         patch_max_chars: int = 4000,
+        detail_issue_limit: int = 25,
+        detail_pull_limit: int = 20,
+        comments_per_item: int = 20,
+        files_per_pull: int = 25,
     ):
         self.token = token
         self.max_pages = max_pages
         self.per_page = per_page
         self.patch_max_chars = patch_max_chars
+        self.detail_issue_limit = detail_issue_limit
+        self.detail_pull_limit = detail_pull_limit
+        self.comments_per_item = comments_per_item
+        self.files_per_pull = files_per_pull
 
-    def collect(self, repo_url: str, target_dir: Path) -> None:
+    def collect(
+        self,
+        repo_url: str,
+        target_dir: Path,
+        progress: Callable[[int, int, str], None] | None = None,
+    ) -> None:
         owner, repo = parse_github_repo_url(repo_url)
         github_dir = target_dir / "_github"
         github_dir.mkdir(parents=True, exist_ok=True)
-
-        self._write_repo_metadata(owner, repo, github_dir)
-        self._write_collection(
-            github_dir / "issues.md",
-            "Issues",
-            self._collect_issues(owner, repo),
-        )
-        self._write_collection(
-            github_dir / "pull_requests.md",
-            "Pull Requests",
-            self._collect_pull_requests(owner, repo),
-        )
-        self._write_collection(
-            github_dir / "repository_activity.md",
-            "Repository Activity",
-            self._collect_activity(owner, repo),
-        )
-        self._write_collection(
-            github_dir / "discussions.md",
-            "Discussions",
-            self._collect_discussions(owner, repo),
-        )
-        self._clone_wiki(repo_url, github_dir)
+        steps = [
+            ("Repository metadata", lambda: self._write_repo_metadata(owner, repo, github_dir)),
+            ("Issues", lambda: self._write_collection(github_dir / "issues.md", "Issues", self._collect_issues(owner, repo))),
+            (
+                "Pull requests",
+                lambda: self._write_collection(
+                    github_dir / "pull_requests.md",
+                    "Pull Requests",
+                    self._collect_pull_requests(owner, repo),
+                ),
+            ),
+            (
+                "Repository activity",
+                lambda: self._write_collection(
+                    github_dir / "repository_activity.md",
+                    "Repository Activity",
+                    self._collect_activity(owner, repo),
+                ),
+            ),
+            (
+                "Discussions",
+                lambda: self._write_collection(
+                    github_dir / "discussions.md",
+                    "Discussions",
+                    self._collect_discussions(owner, repo),
+                ),
+            ),
+            ("Wiki", lambda: self._clone_wiki(repo_url, github_dir)),
+        ]
+        total_steps = len(steps)
+        for index, (label, action) in enumerate(steps, start=1):
+            action()
+            if progress:
+                progress(index, total_steps, label)
 
     def _write_repo_metadata(self, owner: str, repo: str, github_dir: Path) -> None:
         metadata = self._request_json(f"/repos/{owner}/{repo}")
@@ -81,24 +106,76 @@ class GitHubRepositoryCollector:
     def _collect_issues(self, owner: str, repo: str) -> list[str]:
         issues = self._request_pages(f"/repos/{owner}/{repo}/issues", {"state": "all", "sort": "updated"})
         sections: list[str] = []
+        issue_count = 0
         for issue in issues:
             if issue.get("pull_request"):
                 continue
-            comments = self._request_pages(f"/repos/{owner}/{repo}/issues/{issue['number']}/comments")
-            sections.append(self._format_issue_like("Issue", issue, comments))
+            issue_count += 1
+            comments: list[dict[str, Any]] = []
+            if issue_count <= self.detail_issue_limit:
+                comments = self._request_pages(
+                    f"/repos/{owner}/{repo}/issues/{issue['number']}/comments",
+                    limit=self.comments_per_item,
+                )
+            sections.append(
+                self._format_issue_like(
+                    "Issue",
+                    issue,
+                    comments,
+                    detail_collected=issue_count <= self.detail_issue_limit,
+                )
+            )
         return sections
 
     def _collect_pull_requests(self, owner: str, repo: str) -> list[str]:
         pulls = self._request_pages(f"/repos/{owner}/{repo}/pulls", {"state": "all", "sort": "updated"})
         sections: list[str] = []
-        for pull in pulls:
+        for index, pull in enumerate(pulls, start=1):
             number = pull["number"]
-            detail = self._request_json(f"/repos/{owner}/{repo}/pulls/{number}", default=pull)
-            comments = self._request_pages(f"/repos/{owner}/{repo}/issues/{number}/comments")
-            review_comments = self._request_pages(f"/repos/{owner}/{repo}/pulls/{number}/comments")
-            reviews = self._request_pages(f"/repos/{owner}/{repo}/pulls/{number}/reviews")
-            files = self._request_pages(f"/repos/{owner}/{repo}/pulls/{number}/files")
-            sections.append(self._format_pull_request(detail, comments, review_comments, reviews, files))
+            detail_collected = index <= self.detail_pull_limit
+            detail = self._request_json(f"/repos/{owner}/{repo}/pulls/{number}", default=pull) if detail_collected else pull
+            comments = (
+                self._request_pages(
+                    f"/repos/{owner}/{repo}/issues/{number}/comments",
+                    limit=self.comments_per_item,
+                )
+                if detail_collected
+                else []
+            )
+            review_comments = (
+                self._request_pages(
+                    f"/repos/{owner}/{repo}/pulls/{number}/comments",
+                    limit=self.comments_per_item,
+                )
+                if detail_collected
+                else []
+            )
+            reviews = (
+                self._request_pages(
+                    f"/repos/{owner}/{repo}/pulls/{number}/reviews",
+                    limit=self.comments_per_item,
+                )
+                if detail_collected
+                else []
+            )
+            files = (
+                self._request_pages(
+                    f"/repos/{owner}/{repo}/pulls/{number}/files",
+                    limit=self.files_per_pull,
+                )
+                if detail_collected
+                else []
+            )
+            sections.append(
+                self._format_pull_request(
+                    detail,
+                    comments,
+                    review_comments,
+                    reviews,
+                    files,
+                    detail_collected=detail_collected,
+                )
+            )
         return sections
 
     def _collect_activity(self, owner: str, repo: str) -> list[str]:
@@ -209,8 +286,18 @@ class GitHubRepositoryCollector:
                 "# Wiki\n\nNo wiki repository was available or public for this repo.",
                 encoding="utf-8",
             )
+            return
+        git_dir = wiki_dir / ".git"
+        if git_dir.exists():
+            shutil.rmtree(git_dir, ignore_errors=True)
 
-    def _request_pages(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def _request_pages(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         collected: list[dict[str, Any]] = []
         for page in range(1, self.max_pages + 1):
             page_params = {"per_page": self.per_page, "page": page, **(params or {})}
@@ -220,6 +307,8 @@ class GitHubRepositoryCollector:
             if not isinstance(payload, list):
                 break
             collected.extend(payload)
+            if limit is not None and len(collected) >= limit:
+                return collected[:limit]
             if len(payload) < self.per_page:
                 break
         return collected
@@ -261,7 +350,14 @@ class GitHubRepositoryCollector:
         body = "\n\n".join(sections) if sections else "No items found or endpoint unavailable."
         path.write_text(f"# {title}\n\n{body}\n", encoding="utf-8")
 
-    def _format_issue_like(self, label: str, item: dict[str, Any], comments: list[dict[str, Any]]) -> str:
+    def _format_issue_like(
+        self,
+        label: str,
+        item: dict[str, Any],
+        comments: list[dict[str, Any]],
+        *,
+        detail_collected: bool,
+    ) -> str:
         lines = [
             f"## {label} #{item.get('number')}: {item.get('title')}",
             "",
@@ -275,6 +371,9 @@ class GitHubRepositoryCollector:
             "### Body",
             item.get("body") or "",
         ]
+        if not detail_collected:
+            lines.extend(["", "### Comments", "Detailed comments omitted for scale; metadata and body were collected."])
+            return "\n".join(lines)
         lines.extend(self._format_comments(comments, "Comments"))
         return "\n".join(lines)
 
@@ -285,6 +384,8 @@ class GitHubRepositoryCollector:
         review_comments: list[dict[str, Any]],
         reviews: list[dict[str, Any]],
         files: list[dict[str, Any]],
+        *,
+        detail_collected: bool,
     ) -> str:
         lines = [
             f"## Pull Request #{pull.get('number')}: {pull.get('title')}",
@@ -303,6 +404,13 @@ class GitHubRepositoryCollector:
             "",
             "### Changed Files",
         ]
+        if not detail_collected:
+            lines.extend(
+                [
+                    "Detailed review threads and file patches were omitted for scale; PR metadata and body were collected.",
+                ]
+            )
+            return "\n".join(lines)
         for file in files:
             patch = (file.get("patch") or "")[: self.patch_max_chars]
             lines.extend(

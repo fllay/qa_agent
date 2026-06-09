@@ -6,119 +6,42 @@
     <title>QA Agent</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body>
-    <main class="shell">
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Knowledge Q&A</p>
-          <h1>Ask questions about your docs and GitHub repos.</h1>
-          <p class="intro">
-            Create a topic, add links or files, then ask questions with answers based on that topic only.
-          </p>
-          <div class="flow-strip" aria-label="Workflow">
-            <span>1. Name a topic</span>
-            <span>2. Add sources</span>
-            <span>3. Ask questions</span>
-          </div>
+  <body class="home-page">
+    <main class="home-shell">
+      <nav class="home-nav">
+        <strong>QA Agent</strong>
+        <a class="nav-button" href="/chat">Open Chat</a>
+      </nav>
+
+      <section class="home-hero">
+        <p class="eyebrow">Knowledge Q&A</p>
+        <h1>Ask questions about your docs and GitHub repos.</h1>
+        <p>
+          Create topics, add sources, and use focused chat threads to ask questions against the right context.
+        </p>
+        <div class="home-actions">
+          <a class="primary-link" href="/chat">Start Agent Chat</a>
+          <a class="secondary-link" href="/chat?createTopic=true">Create Topic Manually</a>
         </div>
-        <form id="topic-form" class="panel">
-          <h2>Create Topic</h2>
-          <label>
-            Name
-            <input id="topic-name" name="name" required maxlength="120" placeholder="Example: Billing API" />
-          </label>
-          <div class="source-list-field">
-            <label for="topic-source">URLs or documents</label>
-            <div class="source-entry-row">
-              <input id="topic-source" placeholder="GitHub URL or website URL" />
-              <div class="source-actions">
-                <button id="add-topic-source" type="button" class="secondary">Add</button>
-                <label class="upload-button" for="topic-documents">Upload Docs</label>
-              </div>
-              <input id="topic-documents" class="file-input" type="file" multiple />
-            </div>
-            <ul id="topic-source-list" class="source-list"></ul>
-          </div>
-          <button type="submit">Create</button>
-        </form>
       </section>
 
-      <section class="quick-stats" aria-label="System capabilities">
+      <section class="home-cards">
         <article>
-          <strong>Separate topics</strong>
-          <span>Keep every project organized.</span>
+          <span>01</span>
+          <strong>Create a topic</strong>
+          <p>Keep each project or knowledge area separate.</p>
         </article>
         <article>
-          <strong>Links or files</strong>
-          <span>Add repos, URLs, or documents.</span>
+          <span>02</span>
+          <strong>Add sources</strong>
+          <p>Use GitHub URLs, website URLs, or documents.</p>
         </article>
         <article>
-          <strong>Grounded answers</strong>
-          <span>Answers use the selected topic.</span>
+          <span>03</span>
+          <strong>Chat in threads</strong>
+          <p>Use sub-threads inside each topic for focused Q&A.</p>
         </article>
-      </section>
-
-      <section class="workspace">
-        <aside class="panel">
-          <div class="section-head">
-            <h2>Topics</h2>
-            <button id="refresh-topics" type="button" class="secondary refresh-button">Refresh</button>
-          </div>
-          <div id="topics" class="topics"></div>
-        </aside>
-
-        <section class="panel detail">
-          <div id="empty-state" class="empty">
-            <h2>Select or create a topic</h2>
-            <p>Choose a topic to add sources and start asking questions.</p>
-          </div>
-
-          <div id="topic-detail" hidden>
-            <div class="section-head">
-              <div>
-                <p id="topic-status" class="status"></p>
-                <h2 id="detail-title"></h2>
-                <p id="detail-description"></p>
-              </div>
-              <button id="delete-topic" type="button" class="danger">Delete</button>
-            </div>
-
-            <div class="grid">
-              <form id="ingest-form" class="card">
-                <h3>Ingest Source</h3>
-                <label>
-                  Source Type
-                  <select id="source-kind">
-                    <option value="github">GitHub repository URL</option>
-                    <option value="local_path">Local file or folder path</option>
-                  </select>
-                </label>
-                <label>
-                  Source
-                  <input id="source-value" placeholder="https://github.com/org/repo or C:\docs" />
-                </label>
-                <button type="submit">Build Graph</button>
-              </form>
-
-              <form id="upload-form" class="card">
-                <h3>Upload Documents</h3>
-                <input id="upload-files" type="file" multiple />
-                <button type="submit">Upload & Build Graph</button>
-              </form>
-            </div>
-
-            <form id="ask-form" class="ask">
-              <h3>Ask Question</h3>
-              <textarea id="question" required placeholder="What does this topic say about authentication?"></textarea>
-              <button type="submit">Ask</button>
-            </form>
-
-            <section id="answer" class="answer" hidden></section>
-          </div>
-        </section>
       </section>
     </main>
-    <div id="toast" class="toast" hidden></div>
-    <script src="/static/app.js"></script>
   </body>
 </html>

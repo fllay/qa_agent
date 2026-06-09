@@ -13,6 +13,8 @@ class Topic(BaseModel):
     name: str
     description: str = ""
     status: TopicStatus = "new"
+    progress_percent: int = 0
+    progress_label: str = ""
     graph_path: str | None = None
     last_error: str | None = None
     created_at: datetime
@@ -22,6 +24,18 @@ class Topic(BaseModel):
 class TopicCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = ""
+
+
+class ChatThread(BaseModel):
+    id: str
+    topic_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ThreadCreate(BaseModel):
+    title: str = Field(default="New thread", min_length=1, max_length=120)
 
 
 class IngestRequest(BaseModel):

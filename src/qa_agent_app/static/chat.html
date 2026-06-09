@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QA Agent</title>
+    <link rel="stylesheet" href="/static/chat.css?v=20260609-progress4" />
+  </head>
+  <body>
+    <main class="chat-shell">
+      <button id="toggle-sidebar-open" class="sidebar-toggle sidebar-toggle-open" type="button" aria-label="Open thread history">☰</button>
+      <aside id="thread-history" class="thread-history" aria-label="Thread History">
+        <div class="sidebar-top">
+          <button id="toggle-sidebar-close" class="icon-button" type="button" aria-label="Close thread history">☰</button>
+          <h1>Thread History</h1>
+        </div>
+        <button id="agent-thread" class="thread-item active" type="button">
+          <span>QA Agent</span>
+          <small>Create a topic from chat</small>
+        </button>
+        <div class="sidebar-actions">
+          <button id="manual-topic" type="button">Create topic</button>
+        </div>
+        <div id="topic-tree" class="topic-tree"></div>
+      </aside>
+
+      <section class="chat-main">
+        <header class="chat-header">
+        </header>
+
+        <section id="messages" class="messages" aria-live="polite">
+          <div class="empty-chat">
+            <h2>QA Agent</h2>
+            <p>Tell the agent what topic you want to create, or use the Create topic button.</p>
+          </div>
+        </section>
+
+        <form id="chat-form" class="composer">
+          <textarea id="chat-input" placeholder="Type your message..." rows="4"></textarea>
+          <div class="composer-footer">
+            <label class="attach-button" for="chat-files" aria-label="Attach files">⌕</label>
+            <input id="chat-files" type="file" multiple hidden />
+            <span id="composer-hint">QA Agent creates a new topic from your message.</span>
+            <button type="submit">Send</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <dialog id="topic-modal" class="topic-modal">
+      <form id="modal-topic-form" method="dialog">
+        <div class="modal-head">
+          <h2>Create Topic</h2>
+          <button id="close-modal" type="button" aria-label="Close">×</button>
+        </div>
+        <label>
+          Topic name
+          <input id="modal-topic-name" required maxlength="120" placeholder="Example: srsRAN Project" />
+        </label>
+        <label>
+          Sources
+          <input id="modal-topic-source" placeholder="GitHub repository URL" />
+        </label>
+        <div class="modal-actions">
+          <button id="modal-add-source" type="button">Add source</button>
+          <label class="modal-upload" for="modal-topic-files">Upload docs</label>
+          <input id="modal-topic-files" type="file" multiple hidden />
+        </div>
+        <ul id="modal-source-list" class="modal-source-list"></ul>
+        <button class="modal-submit" type="submit">Create</button>
+      </form>
+    </dialog>
+
+    <dialog id="topic-settings-modal" class="topic-modal">
+      <form id="topic-settings-form" method="dialog">
+        <div class="modal-head">
+          <h2 id="topic-settings-title">Topic settings</h2>
+          <button id="close-topic-settings" type="button" aria-label="Close">Close</button>
+        </div>
+        <label>
+          Add source
+          <input id="topic-settings-source" placeholder="GitHub repository URL" />
+        </label>
+        <div class="modal-actions">
+          <button id="topic-settings-add-source" type="button">Add source</button>
+          <label class="modal-upload" for="topic-settings-files">Upload docs</label>
+          <input id="topic-settings-files" type="file" multiple hidden />
+        </div>
+        <ul id="topic-settings-source-list" class="modal-source-list"></ul>
+        <button id="topic-settings-submit" class="modal-submit" type="submit">Apply sources</button>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/static/chat.js?v=20260609-progress4"></script>
+  </body>
+</html>
+
