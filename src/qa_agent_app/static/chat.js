@@ -7,12 +7,13 @@ let modalFiles = [];
 let settingsTopicId = null;
 let settingsSources = [];
 let settingsFiles = [];
-let messages = [];
 let isCreatingTopic = false;
 let isUpdatingTopicSources = false;
 let topicPollTimer = null;
+const threadSessions = new Map();
 
 const els = {
+  shell: document.querySelector(".chat-shell"),
   sidebar: document.querySelector("#thread-history"),
   openSidebar: document.querySelector("#toggle-sidebar-open"),
   closeSidebar: document.querySelector("#toggle-sidebar-close"),
@@ -23,6 +24,8 @@ const els = {
   chatForm: document.querySelector("#chat-form"),
   chatInput: document.querySelector("#chat-input"),
   composerHint: document.querySelector("#composer-hint"),
+  sendButton: document.querySelector("#chat-send"),
+  scrollButton: document.querySelector("#scroll-to-bottom"),
   modal: document.querySelector("#topic-modal"),
   modalForm: document.querySelector("#modal-topic-form"),
   closeModal: document.querySelector("#close-modal"),
@@ -43,6 +46,46 @@ const els = {
   settingsSubmit: document.querySelector("#topic-settings-submit"),
   toast: document.querySelector("#toast"),
 };
+
+function sessionKeyFor(threadId = activeThreadId) {
+  return threadId === "agent" ? "agent" : threadId;
+}
+
+function getSession(threadId = activeThreadId) {
+  const key = sessionKeyFor(threadId);
+  if (!threadSessions.has(key)) {
+    threadSessions.set(key, {
+      messages: [],
+      pending: false,
+      draft: "",
+      copiedId: null,
+      scrollLocked: false,
+    });
+  }
+  return threadSessions.get(key);
+}
+
+function currentMessages() {
+  return getSession().messages;
+}
+
+function isPending() {
+  return getSession().pending;
+}
+
+function setPending(pending) {
+  getSession().pending = pending;
+  updateComposerState();
+  renderMessages();
+}
+
+function currentThreadLabel() {
+  if (activeThreadId === "agent") {
+    return "QA Agent";
+  }
+  const thread = threads.find((item) => item.id === activeThreadId);
+  return thread?.title || "Agent Chat";
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
@@ -65,7 +108,17 @@ function showToast(message) {
 
 function setSidebarOpen(open) {
   els.sidebar.classList.toggle("is-collapsed", !open);
-  document.querySelector(".chat-shell").classList.toggle("sidebar-hidden", !open);
+  els.shell.classList.toggle("sidebar-hidden", !open);
+}
+
+function saveDraft() {
+  getSession().draft = els.chatInput.value;
+}
+
+function restoreDraft() {
+  els.chatInput.value = getSession().draft || "";
+  autoResizeComposer();
+  updateComposerState();
 }
 
 async function loadData() {
@@ -121,23 +174,25 @@ function renderTopicTree() {
 }
 
 function selectThread(topicId, threadId) {
+  saveDraft();
   activeTopicId = topicId;
   activeThreadId = threadId;
   els.agentThread.classList.remove("active");
   updateComposerHint(topicId);
-  messages = [];
-  renderMessages();
   renderTopicTree();
+  restoreDraft();
+  renderMessages();
 }
 
 function selectAgentChat() {
+  saveDraft();
   activeTopicId = null;
   activeThreadId = "agent";
   els.agentThread.classList.add("active");
   els.composerHint.textContent = "QA Agent creates a new topic from your message.";
-  messages = [];
-  renderMessages();
   renderTopicTree();
+  restoreDraft();
+  renderMessages();
 }
 
 async function createTopic(name, sources = []) {
@@ -196,6 +251,82 @@ async function addSourcesToTopic(topicId, sources = []) {
       method: "POST",
       body: formData,
     });
+  }
+}
+
+function buildMessage(role, text, extra = {}) {
+  return {
+    id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    text,
+    createdAt: Date.now(),
+    ...extra,
+  };
+}
+
+function addMessage(role, text, extra = {}) {
+  getSession().messages.push(buildMessage(role, text, extra));
+  renderMessages();
+  scrollMessagesToBottom(true);
+}
+
+function replaceAssistantMessage(messageId, text) {
+  const session = getSession();
+  const target = session.messages.find((message) => message.id === messageId);
+  if (target) {
+    target.text = text;
+    target.refreshing = false;
+  }
+  renderMessages();
+}
+
+async function resendAssistantResponse(messageId) {
+  const session = getSession();
+  if (session.pending || activeThreadId === "agent") {
+    return;
+  }
+  const index = session.messages.findIndex((message) => message.id === messageId);
+  if (index === -1) return;
+  const sourceMessage = [...session.messages.slice(0, index)].reverse().find((message) => message.role === "user");
+  if (!sourceMessage) return;
+  const target = session.messages[index];
+  target.refreshing = true;
+  session.pending = true;
+  updateComposerState();
+  renderMessages();
+  try {
+    const answer = await api(`/api/topics/${activeTopicId}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: sourceMessage.text }),
+    });
+    replaceAssistantMessage(messageId, answer.answer);
+  } catch (error) {
+    replaceAssistantMessage(messageId, error.message);
+  } finally {
+    session.pending = false;
+    updateComposerState();
+    renderMessages();
+  }
+}
+
+async function copyMessage(messageId) {
+  const session = getSession();
+  const message = session.messages.find((item) => item.id === messageId);
+  if (!message) return;
+  try {
+    await navigator.clipboard.writeText(message.text);
+    session.copiedId = messageId;
+    renderMessages();
+    window.clearTimeout(copyMessage.timer);
+    copyMessage.timer = window.setTimeout(() => {
+      if (session.copiedId === messageId) {
+        session.copiedId = null;
+        renderMessages();
+      }
+    }, 1500);
+  } catch (error) {
+    showToast("Copy failed.");
   }
 }
 
@@ -273,29 +404,44 @@ els.modalForm.addEventListener("submit", async (event) => {
 els.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = els.chatInput.value.trim();
-  if (!text) return;
+  if (!text || isPending()) return;
+  const session = getSession();
   els.chatInput.value = "";
-  messages.push({ role: "user", text });
-  renderMessages();
+  session.draft = "";
+  autoResizeComposer();
+  addMessage("user", text);
+  setPending(true);
 
   if (activeThreadId === "agent") {
     const topicName = text.length > 80 ? `${text.slice(0, 77)}...` : text;
     try {
+      const agentSession = getSession("agent");
       const topic = await createTopic(topicName, []);
-      messages.push({ role: "agent", text: `Created topic "${topic.name}". Add sources or use Create topic to upload docs.` });
+      if (agentSession.messages.at(-1)?.role === "user" && agentSession.messages.at(-1)?.text === text) {
+        agentSession.messages.pop();
+      }
+      const topicSession = getSession(activeThreadId);
+      if (!topicSession.messages.length) {
+        topicSession.messages.push(buildMessage("user", text));
+      }
+      topicSession.messages.push(
+        buildMessage("agent", `Created topic "${topic.name}". Add sources or use Create topic to upload docs.`),
+      );
       renderMessages();
+      scrollMessagesToBottom(true);
       showToast(`Created topic "${topic.name}".`);
     } catch (error) {
-      messages.push({ role: "agent", text: error.message });
-      renderMessages();
+      addMessage("agent", error.message);
+    } finally {
+      setPending(false);
     }
     return;
   }
 
   const topic = topics.find((item) => item.id === activeTopicId);
   if (!topic || topic.status !== "ready") {
-    messages.push({ role: "agent", text: topicUnavailableMessage(topic) });
-    renderMessages();
+    addMessage("agent", topicUnavailableMessage(topic));
+    setPending(false);
     return;
   }
 
@@ -305,11 +451,12 @@ els.chatForm.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question: text }),
     });
-    messages.push({ role: "agent", text: answer.answer });
+    addMessage("agent", answer.answer);
   } catch (error) {
-    messages.push({ role: "agent", text: error.message });
+    addMessage("agent", error.message);
+  } finally {
+    setPending(false);
   }
-  renderMessages();
 });
 
 els.settingsForm.addEventListener("submit", async (event) => {
@@ -337,12 +484,27 @@ els.settingsForm.addEventListener("submit", async (event) => {
   }
 });
 
+els.chatInput.addEventListener("input", () => {
+  saveDraft();
+  autoResizeComposer();
+  updateComposerState();
+});
+
 els.chatInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     els.chatForm.requestSubmit();
   }
 });
+
+els.messages.addEventListener("scroll", () => {
+  const gap = els.messages.scrollHeight - els.messages.scrollTop - els.messages.clientHeight;
+  const locked = gap > 96;
+  getSession().scrollLocked = locked;
+  els.scrollButton.hidden = !locked;
+});
+
+els.scrollButton.addEventListener("click", () => scrollMessagesToBottom(true));
 
 function addModalSourceFromInput() {
   const value = els.modalTopicSource.value.trim();
@@ -488,29 +650,119 @@ function setSettingsBusy(busy, label) {
   els.settingsSubmit.textContent = label;
 }
 
+function canRefreshMessage(messageIndex, session) {
+  if (activeThreadId === "agent" || session.pending) {
+    return false;
+  }
+  const message = session.messages[messageIndex];
+  if (message.role !== "agent") {
+    return false;
+  }
+  return session.messages.slice(0, messageIndex).some((item) => item.role === "user");
+}
+
 function renderMessages() {
+  const session = getSession();
+  const messages = session.messages;
   els.messages.classList.toggle("is-empty", !messages.length);
   els.messages.classList.toggle("has-messages", messages.length > 0);
   if (!messages.length) {
     els.messages.innerHTML = `
       <div class="empty-chat">
-        <h2>${activeThreadId === "agent" ? "QA Agent" : escapeHtml(currentThreadTitle())}</h2>
+        <h2>${escapeHtml(currentThreadLabel())}</h2>
         <p>${activeThreadId === "agent" ? "Tell the agent what topic you want to create, or use the Create topic button." : "Ask questions in this thread."}</p>
       </div>
     `;
+    els.scrollButton.hidden = true;
     return;
   }
-  els.messages.innerHTML = `<div class="message-list">${messages
-    .map((message) => `<div class="message ${message.role}">${escapeHtml(message.text)}</div>`)
-    .join("")}</div>`;
-  els.messages.scrollTop = els.messages.scrollHeight;
+
+  els.messages.innerHTML = `
+    <div class="message-list">
+      ${messages
+        .map((message, index) => {
+          const actions =
+            message.role === "agent"
+              ? `
+                <div class="message-actions">
+                  <button class="message-action" type="button" data-copy-id="${message.id}">
+                    ${session.copiedId === message.id ? "Copied" : "Copy"}
+                  </button>
+                  ${
+                    canRefreshMessage(index, session)
+                      ? `<button class="message-action" type="button" data-refresh-id="${message.id}">
+                          ${message.refreshing ? "Refreshing..." : "Refresh"}
+                        </button>`
+                      : ""
+                  }
+                </div>
+              `
+              : "";
+          return `
+            <article class="message-row ${message.role}">
+              <div class="message ${message.role}">
+                <div class="message-body">${escapeHtml(message.text)}</div>
+                ${actions}
+              </div>
+            </article>
+          `;
+        })
+        .join("")}
+      ${
+        session.pending
+          ? `
+            <article class="message-row agent">
+              <div class="message agent message-loading">
+                <span class="loading-dot"></span>
+                <span class="loading-dot"></span>
+                <span class="loading-dot"></span>
+              </div>
+            </article>
+          `
+          : ""
+      }
+    </div>
+  `;
+
+  els.messages.querySelectorAll("[data-copy-id]").forEach((button) => {
+    button.addEventListener("click", () => copyMessage(button.dataset.copyId));
+  });
+  els.messages.querySelectorAll("[data-refresh-id]").forEach((button) => {
+    button.addEventListener("click", () => resendAssistantResponse(button.dataset.refreshId));
+  });
+  if (!session.scrollLocked || session.pending) {
+    scrollMessagesToBottom(false);
+  }
+}
+
+function autoResizeComposer() {
+  els.chatInput.style.height = "0px";
+  const nextHeight = Math.min(els.chatInput.scrollHeight, 288);
+  els.chatInput.style.height = `${Math.max(nextHeight, 96)}px`;
+  els.chatInput.style.overflowY = els.chatInput.scrollHeight > 288 ? "auto" : "hidden";
+}
+
+function updateComposerState() {
+  const session = getSession();
+  const hasInput = els.chatInput.value.trim().length > 0;
+  els.sendButton.disabled = session.pending || !hasInput;
+  els.sendButton.textContent = session.pending ? "Sending..." : "Send";
+}
+
+function scrollMessagesToBottom(smooth) {
+  els.messages.scrollTo({
+    top: els.messages.scrollHeight,
+    behavior: smooth ? "smooth" : "auto",
+  });
+  getSession().scrollLocked = false;
+  els.scrollButton.hidden = true;
 }
 
 function inferSourceKind(source) {
-  if (/github\.com[:/]/i.test(source)) {
+  if (/github\.com[:/]/i.test(source) || /gitlab\.com[:/]/i.test(source)) {
     return "github";
   }
-  throw new Error("Manual topic creation currently supports GitHub repository URLs and uploaded documents.");
+  throw new Error("Manual topic creation currently supports repository URLs and uploaded documents.");
 }
 
 function topicUnavailableMessage(topic) {
@@ -578,12 +830,6 @@ function effectiveProgressPercent(topic) {
   return Math.max(topic.progress_percent || 0, 5);
 }
 
-function currentThreadTitle() {
-  const thread = threads.find((item) => item.id === activeThreadId);
-  const topic = topics.find((item) => item.id === activeTopicId);
-  return `${topic?.name || "Topic"} / ${thread?.title || "Thread"}`;
-}
-
 function formatUiMessage(message) {
   const text = String(message || "").trim();
   if (!text) {
@@ -612,6 +858,8 @@ function escapeHtml(value) {
 
 loadData()
   .then(() => {
+    autoResizeComposer();
+    updateComposerState();
     renderMessages();
     const params = new URLSearchParams(window.location.search);
     if (params.get("createTopic") === "true") {

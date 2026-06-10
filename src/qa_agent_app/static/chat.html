@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QA Agent</title>
-    <link rel="stylesheet" href="/static/chat.css?v=20260609-progress4" />
+    <link rel="stylesheet" href="/static/chat.css?v=20260610-session1" />
   </head>
   <body>
     <main class="chat-shell">
@@ -25,9 +25,6 @@
       </aside>
 
       <section class="chat-main">
-        <header class="chat-header">
-        </header>
-
         <section id="messages" class="messages" aria-live="polite">
           <div class="empty-chat">
             <h2>QA Agent</h2>
@@ -35,13 +32,13 @@
           </div>
         </section>
 
+        <button id="scroll-to-bottom" class="scroll-to-bottom" type="button" hidden>Scroll to bottom</button>
+
         <form id="chat-form" class="composer">
           <textarea id="chat-input" placeholder="Type your message..." rows="4"></textarea>
           <div class="composer-footer">
-            <label class="attach-button" for="chat-files" aria-label="Attach files">⌕</label>
-            <input id="chat-files" type="file" multiple hidden />
             <span id="composer-hint">QA Agent creates a new topic from your message.</span>
-            <button type="submit">Send</button>
+            <button id="chat-send" type="submit" disabled>Send</button>
           </div>
         </form>
       </section>
@@ -92,7 +89,6 @@
     </dialog>
 
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/chat.js?v=20260609-progress4"></script>
+    <script src="/static/chat.js?v=20260610-session1"></script>
   </body>
 </html>
-
