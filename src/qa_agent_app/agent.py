@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import TypedDict
+import re
 
 from langgraph.graph import END, StateGraph
 
@@ -154,13 +155,7 @@ class QaAgent:
                 "I could not find matching graph context for this question. "
                 "Try rephrasing the question or rebuilding the topic graph with more source files."
             )
-        context = "\n".join(f"- {item}" for item in context_items)
-        return (
-            f"Question: {question}\n\n"
-            "Relevant graph context found:\n"
-            f"{context}\n\n"
-            "Local LLM endpoint was not used. Start the configured local model endpoint for synthesized prose."
-        )
+        return QaAgent._summarize_context_without_llm(question, context_items)
 
     @staticmethod
     def _generate_with_openai_compatible(
@@ -197,3 +192,347 @@ class QaAgent:
         )
         content = response.choices[0].message.content
         return str(content or "")
+
+    @staticmethod
+    def _summarize_context_without_llm(question: str, context_items: list[str]) -> str:
+        repo_summaries = [QaAgent._extract_repo_summary(item) for item in context_items]
+        repo_summaries = [summary for summary in repo_summaries if summary]
+        archive_notice = next((summary for summary in repo_summaries if summary.get("archived_redirect")), None)
+        repo_descriptions = [summary for summary in repo_summaries if summary is not archive_notice]
+        file_signals = [signal for signal in (QaAgent._extract_file_signal(item) for item in context_items) if signal]
+        broad_repo_question = bool(re.search(r"\b(describe|summary|summarize|project|repository|repo)\b", question, flags=re.IGNORECASE))
+
+        lines: list[str] = []
+        overview = ""
+        purpose = ""
+        if repo_descriptions:
+            primary = repo_descriptions[0]
+            overview = str(primary.get("overview") or "").strip()
+            if QaAgent._looks_like_noisy_summary(overview):
+                overview = QaAgent._derive_overview_from_context(context_items, str(primary["repo"])) or overview
+            if not overview or "repository snapshot" in overview.lower():
+                overview = f"{primary['repo']} is the active codebase for this topic."
+            lines.append(overview)
+            archived_repo = str(archive_notice.get("repo") or "").strip() if archive_notice else ""
+            purpose = str(primary.get("purpose") or "").strip() or QaAgent._derive_purpose_from_context(
+                context_items,
+                overview,
+                excluded_repo=archived_repo,
+            )
+            if purpose:
+                lines.append(purpose)
+            if primary.get("key_files"):
+                lines.append(f"Important entry points in the indexed snapshot include {', '.join(primary['key_files'][:5])}.")
+
+        if archive_notice:
+            lines.append(QaAgent._format_archive_notice(archive_notice))
+
+        if file_signals and not broad_repo_question:
+            lines.append("Relevant indexed files include:")
+            for signal in file_signals[:2]:
+                lines.append(f"- {signal}")
+
+        if not lines:
+            lines.append("Relevant graph context found:")
+            for item in context_items[:3]:
+                lines.append(f"- {QaAgent._compact_generic_context(item)}")
+
+        if not lines:
+            lines.append("I found graph context for this topic, but the local fallback could not build a readable summary.")
+
+        if broad_repo_question and repo_descriptions:
+            concise_lines: list[str] = []
+            if overview:
+                concise_lines.append(overview)
+            else:
+                concise_lines.append(lines[0])
+            if purpose:
+                concise_lines.append(purpose)
+            archive_line_index = 3 if purpose else 2
+            if archive_notice:
+                concise_lines.append(QaAgent._format_archive_notice(archive_notice))
+            elif len(lines) > archive_line_index:
+                concise_lines.append(lines[archive_line_index])
+            return "\n\n".join(concise_lines)
+
+        lines.append("Local LLM endpoint was not used, so this answer was assembled from indexed repository metadata.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_repo_summary(item: str) -> dict[str, object] | None:
+        if not item.startswith("repo::"):
+            return None
+        repo_match = re.match(r"repo::([^|]+)\s+\|\s+([^|]+)\s+\|\s+repository\s+\|", item)
+        repo = repo_match.group(2).strip() if repo_match else item.split("|", 2)[1].strip()
+
+        summary_match = re.search(r"Repository snapshot with \d+ files\.\s+Key files:\s+(.+?)\.\s+(.*?)(?:\s+\|\s+related:|$)", item)
+        key_files: list[str] = []
+        overview = ""
+        purpose = ""
+        if summary_match:
+            key_files = [part.strip() for part in summary_match.group(1).split(",") if part.strip()]
+            overview = summary_match.group(2).strip()
+        overview = re.sub(r"\s+", " ", overview)
+        overview = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", overview)
+        overview = re.sub(r"\[\]\(([^)]+)\)", "", overview)
+        overview = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", overview)
+        overview = re.sub(r"<img[^>]*>", "", overview)
+        overview = re.sub(r"^#+\s*", "", overview)
+        overview = overview.replace("| Repository", " Repository")
+        repo_sentence = QaAgent._extract_repo_named_sentence(overview, repo) or QaAgent._extract_repo_named_sentence(item, repo)
+        if repo_sentence:
+            overview = repo_sentence
+        purpose_sentence = QaAgent._extract_followup_purpose_sentence(overview, item)
+        if purpose_sentence:
+            purpose = purpose_sentence
+        descriptive_sentences = QaAgent._descriptive_sentences(overview)
+        if descriptive_sentences:
+            if not repo_sentence:
+                overview = descriptive_sentences[0]
+            if not purpose and len(descriptive_sentences) > 1:
+                purpose = descriptive_sentences[1]
+        if not purpose:
+            purpose_candidates = QaAgent._descriptive_sentences(item)
+            for sentence in purpose_candidates:
+                if sentence != overview:
+                    purpose = sentence
+                    break
+        if not overview:
+            overview = f"{repo} is the active codebase for this topic."
+        overview = overview[:420].strip(" -|")
+        purpose = purpose[:420].strip(" -|")
+        archived_redirect = QaAgent._extract_archive_redirect(item, repo)
+        return {"repo": repo, "key_files": key_files, "overview": overview, "purpose": purpose, "archived_redirect": archived_redirect}
+
+    @staticmethod
+    def _extract_file_signal(item: str) -> str | None:
+        if not item.startswith("file::"):
+            return None
+        match = re.match(r"file::[^:]+::([^|]+)\s+\|", item)
+        path = match.group(1).strip() if match else None
+        snippet_match = re.search(r"Content snippet:\s+(.*?)(?:\s+\|\s+related:|$)", item)
+        snippet = snippet_match.group(1).strip() if snippet_match else ""
+        snippet = re.sub(r"\s+", " ", snippet)
+        snippet = re.sub(r"\[[^\]]+\]\(([^)]+)\)", r"\1", snippet)
+        snippet = snippet[:180].strip(" -|")
+        if not path:
+            return None
+        if snippet:
+            return f"`{path}`: {snippet}"
+        return f"`{path}`"
+
+    @staticmethod
+    def _compact_generic_context(item: str) -> str:
+        cleaned = re.sub(r"\s*\|\s*related:.*$", "", item)
+        parts = [part.strip() for part in cleaned.split("|") if part.strip()]
+        if len(parts) >= 4:
+            head = parts[1]
+            tail = parts[-1]
+            return f"{head}: {tail}"
+        return cleaned[:220]
+
+    @staticmethod
+    def _descriptive_sentences(text: str) -> list[str]:
+        cleaned = re.sub(r"`+", "", text)
+        cleaned = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", cleaned)
+        cleaned = re.sub(r"\[\]\(([^)]+)\)", " ", cleaned)
+        cleaned = re.sub(r"\[[^\]]*\]\(([^)]+)\)", " ", cleaned)
+        cleaned = re.sub(r"<img[^>]*>", " ", cleaned)
+        cleaned = re.sub(r"https?://\S+", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        sentences = re.split(r"(?<=[.!?])\s+", cleaned)
+        keywords = (
+            " is ",
+            " are ",
+            " provides ",
+            " includes ",
+            " supports ",
+            " designed ",
+            " compliant ",
+            " platform",
+            " project",
+            " solution",
+            " framework",
+            " library",
+            " system",
+            " stack",
+            " service",
+            " toolkit",
+            " agent",
+            " app",
+        )
+        selected: list[str] = []
+        for sentence in sentences:
+            candidate = sentence.strip(" -|")
+            if len(candidate) < 24:
+                continue
+            lowered = candidate.lower()
+            if "repository snapshot" in lowered or "key files:" in lowered:
+                continue
+            if "copyright" in lowered or "spdx-license-identifier" in lowered:
+                continue
+            if not any(keyword in lowered for keyword in keywords):
+                continue
+            if candidate.startswith("#") or candidate.startswith("[") or candidate.startswith("!"):
+                continue
+            selected.append(candidate)
+            if len(selected) == 2:
+                break
+        return selected
+
+    @staticmethod
+    def _extract_repo_named_sentence(text: str, repo: str) -> str:
+        cleaned = re.sub(r"\s+", " ", text)
+        pattern = re.compile(rf"({re.escape(repo)}\s+is\s+.*?[.!?])", flags=re.IGNORECASE)
+        match = pattern.search(cleaned)
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
+    def _extract_followup_purpose_sentence(overview_text: str, source_text: str) -> str:
+        for text in (overview_text, source_text):
+            cleaned = re.sub(r"\s+", " ", text)
+            match = re.search(r"((?:It|This project|This repository)\s+(?:is|provides|includes|supports)\s+.*?[.!?])", cleaned, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _derive_purpose_from_context(context_items: list[str], overview: str, excluded_repo: str = "") -> str:
+        prioritized = sorted(
+            context_items,
+            key=lambda item: 0 if ((QaAgent._extract_context_path(item) and QaAgent._extract_context_path(item).name.lower().startswith("readme")) or item.lower().startswith("file::") and "::readme" in item.lower()) else 1,
+        )
+        for item in prioritized:
+            repo_name = QaAgent._extract_context_repo(item)
+            if excluded_repo and repo_name and repo_name.lower() == excluded_repo.lower():
+                continue
+            path = QaAgent._extract_context_path(item)
+            if path and path.name.lower().startswith("readme") and path.exists():
+                for sentence in QaAgent._descriptive_sentences(path.read_text(encoding="utf-8", errors="ignore")):
+                    if sentence == overview:
+                        continue
+                    lowered = sentence.lower()
+                    if "repository snapshot" in lowered or "key files:" in lowered:
+                        continue
+                    if "copyright" in lowered or "spdx-license-identifier" in lowered:
+                        continue
+                    return sentence
+            snippet_match = re.search(r"Content snippet:\s+(.*?)(?:\s+\|\s+related:|$)", item)
+            if snippet_match:
+                snippet_text = snippet_match.group(1).strip()
+                for sentence in QaAgent._descriptive_sentences(snippet_text):
+                    if sentence == overview:
+                        continue
+                    lowered = sentence.lower()
+                    if "repository snapshot" in lowered or "key files:" in lowered:
+                        continue
+                    if "copyright" in lowered or "spdx-license-identifier" in lowered:
+                        continue
+                    return sentence
+            for sentence in QaAgent._descriptive_sentences(item):
+                if sentence == overview:
+                    continue
+                lowered = sentence.lower()
+                if "repository snapshot" in lowered or "key files:" in lowered:
+                    continue
+                if "copyright" in lowered or "spdx-license-identifier" in lowered:
+                    continue
+                return sentence
+        return ""
+
+    @staticmethod
+    def _derive_overview_from_context(context_items: list[str], repo: str) -> str:
+        prioritized = sorted(
+            context_items,
+            key=lambda item: 0 if ((QaAgent._extract_context_path(item) and QaAgent._extract_context_path(item).name.lower().startswith("readme")) or item.lower().startswith("file::") and "::readme" in item.lower()) else 1,
+        )
+        for item in prioritized:
+            repo_name = QaAgent._extract_context_repo(item)
+            if repo_name and repo_name.lower() != repo.lower():
+                continue
+            path = QaAgent._extract_context_path(item)
+            if path and path.name.lower().startswith("readme") and path.exists():
+                readme_text = path.read_text(encoding="utf-8", errors="ignore")
+                repo_sentence = QaAgent._extract_repo_named_sentence(readme_text, repo)
+                if repo_sentence and not QaAgent._looks_like_noisy_summary(repo_sentence):
+                    return repo_sentence
+                sentences = QaAgent._descriptive_sentences(readme_text)
+                if sentences and not QaAgent._looks_like_noisy_summary(sentences[0]):
+                    return sentences[0]
+            snippet_match = re.search(r"Content snippet:\s+(.*?)(?:\s+\|\s+related:|$)", item)
+            candidate_sources = []
+            if snippet_match:
+                candidate_sources.append(snippet_match.group(1).strip())
+            candidate_sources.append(item)
+            for source in candidate_sources:
+                repo_sentence = QaAgent._extract_repo_named_sentence(source, repo)
+                if repo_sentence and not QaAgent._looks_like_noisy_summary(repo_sentence):
+                    return repo_sentence
+                sentences = QaAgent._descriptive_sentences(source)
+                if sentences:
+                    candidate = sentences[0]
+                    if not QaAgent._looks_like_noisy_summary(candidate):
+                        return candidate
+        return ""
+
+    @staticmethod
+    def _looks_like_noisy_summary(text: str) -> bool:
+        if not text:
+            return True
+        lowered = text.lower()
+        if "repository snapshot" in lowered or "key files:" in lowered:
+            return True
+        if "spdx-license-identifier" in lowered or "copyright" in lowered:
+            return True
+        if "repository " in lowered and "project" not in lowered and "platform" not in lowered and "solution" not in lowered:
+            return True
+        if "[" in text or "](" in text or "http://" in lowered or "https://" in lowered:
+            return True
+        if text.endswith("permissivel") or len(text) < 28:
+            return True
+        return False
+
+    @staticmethod
+    def _extract_context_path(item: str) -> Path | None:
+        parts = [part.strip() for part in item.split("|")]
+        if len(parts) < 4:
+            return None
+        raw_path = parts[3]
+        if not raw_path or raw_path.startswith("Repository snapshot"):
+            return None
+        try:
+            return Path(raw_path)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_archive_redirect(text: str, repo: str) -> str:
+        lowered = text.lower()
+        if "archived" not in lowered and "no longer maintained" not in lowered:
+            return ""
+        matches = [match.group(0).rstrip(".,") for match in re.finditer(r"https?://[^\s)>\]]+", text, flags=re.IGNORECASE)]
+        if not matches:
+            return repo
+        for candidate in matches:
+            lowered_candidate = candidate.lower()
+            if "gitlab.com" in lowered_candidate or "github.com" in lowered_candidate:
+                return candidate
+        return matches[-1]
+
+    @staticmethod
+    def _format_archive_notice(summary: dict[str, object]) -> str:
+        repo = str(summary.get("repo") or "This repository")
+        redirect = str(summary.get("archived_redirect") or "").strip()
+        if redirect:
+            return f"The original `{repo}` repository in this topic is archived and redirects users to {redirect}."
+        return f"The original `{repo}` repository in this topic is archived."
+
+    @staticmethod
+    def _extract_context_repo(item: str) -> str:
+        if item.startswith("repo::"):
+            return item.split("|", 1)[0].replace("repo::", "").strip()
+        if item.startswith("file::"):
+            match = re.match(r"file::([^:]+)::", item)
+            if match:
+                return match.group(1).strip()
+        return ""

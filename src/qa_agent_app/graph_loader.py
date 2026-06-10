@@ -16,7 +16,7 @@ class GraphIndex:
         scored: list[dict[str, Any]] = []
         for node_id, attrs in self.graph.nodes(data=True):
             text = _node_text(node_id, attrs)
-            score = _score(query_terms, text)
+            score = _score(query_terms, text, attrs)
             if score > 0:
                 scored.append(
                     {
@@ -63,9 +63,13 @@ def _node_text(node_id: object, attrs: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _score(query_terms: set[str], text: str) -> float:
+def _score(query_terms: set[str], text: str, attrs: dict[str, Any] | None = None) -> float:
     if not query_terms:
         return 0
     text_terms = _terms(text)
     overlap = query_terms & text_terms
-    return len(overlap) / max(len(query_terms), 1)
+    score = len(overlap) / max(len(query_terms), 1)
+    node_type = str((attrs or {}).get("type") or "").lower()
+    if node_type == "repository" and query_terms & {"repo", "repository", "project", "summary", "summarize"}:
+        score += 0.35
+    return score

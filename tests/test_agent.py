@@ -31,8 +31,77 @@ def test_agent_answers_from_graph_context(tmp_path, monkeypatch):
 
     response = QaAgent().answer(topic, "How does authentication work?")
 
+    assert "Relevant graph context found:" in response.answer
     assert "OAuth token validation" in response.answer
     assert response.citations[0].label == "Authentication"
+
+
+def test_local_fallback_summarizes_repository_nodes():
+    context_items = [
+        (
+            "repo::srsran-project | srsran-project | repository | data\\topics\\topic\\source\\srsran-project | "
+            "Repository snapshot with 14 files. Key files: README.md, _github/discussions.md. "
+            "> Project transition notice: srsRAN Project is now [OCUDU](https://ocudu.org). "
+            "This repository will be archived and is no longer maintained. | related: README.md"
+        ),
+        (
+            "repo::ocudu | ocudu | repository | data\\topics\\topic\\source\\ocudu | "
+            "Repository snapshot with 5702 files. Key files: CMakeLists.txt, README.md, apps/CMakeLists.txt. "
+            "OCUDU is a permissively-licensed, open-source 5G CU/DU project designed for commercial deployment. "
+            "It is a complete radio access network (RAN) solution compliant with 3GPP and O-RAN Alliance specifications and includes the full L1/2/3 stack. "
+            "| related: CMakeLists.txt, README.md"
+        ),
+        (
+            "file::ocudu::README.md | README.md | document | data\\topics\\topic\\source\\ocudu\\README.md | "
+            "ocudu file README.md | Repository ocudu. File README.md. "
+            "Content snippet: OCUDU is a permissively-licensed, open-source 5G CU/DU project designed for commercial deployment."
+        ),
+    ]
+
+    answer = QaAgent._generate_local_context_answer("describe this project", context_items)
+
+    assert "5g cu/du project" in answer.lower()
+    assert "radio access network" in answer.lower()
+    assert "redirects users to https://ocudu.org" in answer
+    assert "Local LLM endpoint" not in answer
+
+
+def test_local_fallback_extracts_generic_repo_purpose():
+    context_items = [
+        (
+            "repo::acmeflow | AcmeFlow | repository | data\\topics\\topic\\source\\acmeflow | "
+            "Repository snapshot with 240 files. Key files: README.md, docs/architecture.md, package.json. "
+            "AcmeFlow is a workflow orchestration platform for data pipelines. "
+            "It provides scheduling, retries, worker coordination, and API-triggered runs for production jobs. "
+            "| related: README.md, package.json"
+        )
+    ]
+
+    answer = QaAgent._generate_local_context_answer("what does this project do", context_items)
+
+    assert "workflow orchestration platform" in answer.lower()
+    assert "scheduling, retries, worker coordination" in answer.lower()
+
+
+def test_local_fallback_cleans_badge_heavy_repo_summary():
+    context_items = [
+        (
+            "repo::ocudu | ocudu | repository | data\\topics\\topic\\source\\ocudu | "
+            "Repository snapshot with 5702 files. Key files: CMakeLists.txt, README.md. "
+            "# The OCUDU Project [![Pipeline](https://gitlab.com/ocudu/ocudu/-/pipelines?scope=branches)] "
+            "[![Documentation](https://docs.ocudu.org)] [![License](https://spdx.org/licenses/BSD-3-Clause-Open-MPI.html)] "
+            "OCUDU is a permissively-licensed, open-source 5G CU/DU project designed for commercial deployment. "
+            "It is a complete radio access network (RAN) solution compliant with 3GPP and O-RAN Alliance specifications and includes the full L1/2/3 stack. "
+            "| related: CMakeLists.txt, README.md"
+        )
+    ]
+
+    answer = QaAgent._generate_local_context_answer("what this project do", context_items)
+
+    assert "# The OCUDU Project" not in answer
+    assert "https://gitlab.com/ocudu/ocudu/-/pipelines" not in answer
+    assert "5g cu/du project" in answer.lower()
+    assert "full l1/2/3 stack" in answer.lower()
 
 
 def test_openrouter_requires_three_models():

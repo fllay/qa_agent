@@ -1,10 +1,13 @@
 import shutil
 import subprocess
+import re
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import UploadFile
 
-from .graphify_client import GraphifyClient
+from .fallback_graph import build_fallback_graph
+from .graphify_client import GraphifyClient, GraphifyError
 from .github_collector import GitHubRepositoryCollector
 from .models import IngestRequest, Topic
 from .storage import TopicStore
@@ -48,6 +51,14 @@ class IngestionService:
                         label,
                     ),
                 )
+                replacement_url = self._detect_repository_replacement(repo_dir)
+                if replacement_url:
+                    self._set_progress(topic.id, 76, "Following active repository")
+                    replacement_dir = self._unique_path(
+                        source_dir,
+                        self._slug_name(Path(replacement_url).stem or "active-repo"),
+                    )
+                    self._clone_repo(replacement_url, replacement_dir)
             elif request.kind == "local_path":
                 self._set_progress(topic.id, 35, "Copying local source")
                 source_path = Path(request.value)
@@ -56,8 +67,8 @@ class IngestionService:
             else:
                 raise ValueError("Upload ingestion must use the upload endpoint.")
             self._set_progress(topic.id, 82, "Building graph")
-            graph_path = self.graphify.build_graph(topic_dir, source_dir)
-            self._set_progress(topic.id, 96, "Finalizing graph")
+            graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
+            self._set_progress(topic.id, 96, "Finalizing graph", graph_path=str(graph_path))
             return self.store.update_topic(
                 topic.id,
                 status="ready",
@@ -93,8 +104,8 @@ class IngestionService:
                         output.write(chunk)
                 self._set_progress(topic.id, 15 + int((index / total_files) * 55), f"Uploaded {safe_name}")
             self._set_progress(topic.id, 82, "Building graph")
-            graph_path = self.graphify.build_graph(topic_dir, source_dir)
-            self._set_progress(topic.id, 96, "Finalizing graph")
+            graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
+            self._set_progress(topic.id, 96, "Finalizing graph", graph_path=str(graph_path))
             return self.store.update_topic(
                 topic.id,
                 status="ready",
@@ -116,18 +127,42 @@ class IngestionService:
 
     @staticmethod
     def _clone_repo(url: str, target: Path) -> None:
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", url, str(target)],
-            text=True,
-            capture_output=True,
-            check=False,
+        normalized_url = IngestionService._normalize_clone_url(url)
+        target = target.resolve()
+        result = IngestionService._run_git_command(
+            ["git", "-c", "core.longpaths=true", "clone", "--depth", "1", normalized_url, str(target)]
         )
+        if result.returncode != 0 and "Clone succeeded, but checkout failed." in (result.stderr or "") and (target / ".git").exists():
+            recovery = IngestionService._run_git_command(
+                ["git", "-C", str(target), "-c", "core.longpaths=true", "checkout", "-f", "HEAD"]
+            )
+            if recovery.returncode == 0:
+                result = recovery
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(f"git clone failed: {detail}")
         git_dir = target / ".git"
         if git_dir.exists():
             shutil.rmtree(git_dir, ignore_errors=True)
+
+    @staticmethod
+    def _run_git_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    @staticmethod
+    def _normalize_clone_url(url: str) -> str:
+        parsed = urlsplit(url.strip())
+        if parsed.scheme in {"http", "https"} and "gitlab.com" in parsed.netloc.lower():
+            path = parsed.path.rstrip("/")
+            if path and not path.endswith(".git"):
+                path = f"{path}.git"
+            return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
+        return url
 
     @staticmethod
     def _copy_local_path(source: Path, target: Path) -> None:
@@ -186,3 +221,84 @@ class IngestionService:
             graph_path=graph_path,
             last_error=last_error,
         )
+
+    def _build_graph_with_diagnostics(self, topic_dir: Path, source_dir: Path) -> Path:
+        try:
+            return self.graphify.build_graph(topic_dir, source_dir)
+        except GraphifyError as exc:
+            if "Graphify completed but produced an empty graph" in str(exc):
+                return build_fallback_graph(topic_dir, source_dir)
+            diagnosis = self._diagnose_empty_graph_source(source_dir, str(exc))
+            if diagnosis:
+                raise RuntimeError(diagnosis) from exc
+            raise
+
+    @classmethod
+    def _diagnose_empty_graph_source(cls, source_dir: Path, error_text: str) -> str | None:
+        if "Graphify completed but produced an empty graph" not in error_text:
+            return None
+
+        repo_hint = cls._diagnose_archived_repository(source_dir)
+        if repo_hint:
+            return repo_hint
+        return None
+
+    @classmethod
+    def _diagnose_archived_repository(cls, source_dir: Path) -> str | None:
+        for repo_dir in [path for path in source_dir.iterdir() if path.is_dir()]:
+            replacement_url = cls._detect_repository_replacement(repo_dir)
+            if replacement_url:
+                return f"This GitHub repo is archived. Use the active repository instead: {replacement_url}"
+        for path in cls._replacement_inspection_files(source_dir):
+            text = cls._read_text_if_possible(path)
+            if not text or not cls._looks_like_archived_transition(text):
+                continue
+            return "This GitHub repo is archived and does not include the active codebase."
+        return None
+
+    @classmethod
+    def _detect_repository_replacement(cls, repo_dir: Path) -> str | None:
+        for path in cls._replacement_inspection_files(repo_dir):
+            text = cls._read_text_if_possible(path)
+            if not text or not cls._looks_like_archived_transition(text):
+                continue
+            replacement_url = cls._extract_replacement_url(text)
+            if replacement_url:
+                return replacement_url
+        return None
+
+    @staticmethod
+    def _replacement_inspection_files(root: Path) -> list[Path]:
+        return [
+            *root.glob("README*"),
+            *root.glob("_github/repository.md"),
+            *root.glob("_github/discussions.md"),
+        ]
+
+    @staticmethod
+    def _read_text_if_possible(path: Path) -> str | None:
+        try:
+            return path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return None
+
+    @staticmethod
+    def _looks_like_archived_transition(text: str) -> bool:
+        lowered = text.lower()
+        markers = [
+            "project transition notice",
+            "development has transitioned",
+            "this repository will be archived",
+            "no longer maintained",
+            "- archived: true",
+            "default branch: archive",
+        ]
+        return any(marker in lowered for marker in markers)
+
+    @staticmethod
+    def _extract_replacement_url(text: str) -> str | None:
+        for match in re.finditer(r"https?://[^\s)>\]]+", text, flags=re.IGNORECASE):
+            url = match.group(0).rstrip(".,")
+            if "gitlab.com" in url.lower():
+                return url
+        return None

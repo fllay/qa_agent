@@ -254,6 +254,9 @@ button {
   border: 1px solid var(--line);
   border-radius: 18px;
   padding: 14px 16px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
   background: var(--soft);
 }
 

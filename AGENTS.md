@@ -62,3 +62,18 @@
 - Added per-topic progress persistence (`progress_percent`, `progress_label`) and hooked ingestion stages into it so indexing topics can show a live percentage and current stage text while the chat page polls.
 - Added a frontend guard so indexing topics never render `0%` in the sidebar once they have entered the in-progress state, and bumped the chat asset version string again to force browsers onto the updated bundle.
 - Replaced raw long backend errors in the chat UI with shorter user-facing messages and constrained toast width/wrapping so empty-graph or config errors do not break the composer layout.
+
+## 2026-06-10
+
+- Added archived-repository diagnosis on empty Graphify outputs so migrated GitHub repos no longer fall back to the generic "not analyzable code" error.
+- Detects transition notices and replacement GitLab URLs from cloned repo content, returning a concise actionable message such as the `srsran/srsRAN_Project` handoff to `https://gitlab.com/ocudu/ocudu`.
+- Added a regression test for archived-repo empty-graph handling and verified the helper directly against the locally cloned `srsRAN_Project` snapshot under `data/topics/`.
+- Changed GitHub ingestion to follow archived-repo replacement URLs automatically, so `srsran/srsRAN_Project` now clones the active OCUDU GitLab repository before graph building.
+- Added a local fallback graph builder that synthesizes `fallback-graph.json` from repository README/config/code snapshots whenever Graphify returns an empty graph, allowing topics to reach `ready` instead of failing.
+- Tuned retrieval to prioritize repository-level summary nodes for broad prompts like "summarize this repository" and verified a live ingest plus QA round-trip against `https://github.com/srsran/srsRAN_Project`.
+- Fixed GitLab replacement cloning under the `C:\Program Files (x86)\Git\qa_agent` workspace by normalizing handoff URLs to canonical `.git` form and cloning to an absolute target path, avoiding the redirect-triggered `could not lock config file ... .git/config` failure.
+- Hardened repository cloning further by forcing `core.longpaths=true` on clone and retrying with a forced `git checkout -f HEAD` when Git reports `Clone succeeded, but checkout failed`, so recoverable Windows checkout problems do not fail topic ingestion immediately.
+- Replaced the no-local-LLM answer fallback from a raw graph-context dump with a readable repository summary that highlights the active codebase, archived handoff repo, and a few relevant files, while keeping a generic fallback for non-repository graph nodes.
+- Shortened the broad no-local-LLM repository summary further and preserved chat message line breaks with `white-space: pre-wrap`, so prompts like `describe this project` render as a compact three-paragraph answer instead of one dense wrapped block.
+- Extended the broad repository fallback to include the extracted project-purpose sentence from indexed README context, so prompts like `what this project do` explain that OCUDU is a 5G CU/DU RAN solution with a full L1/L2/L3 stack instead of only saying it is the active codebase.
+- Removed OCUDU-specific fallback extraction logic and replaced it with generic descriptive-sentence extraction from repository context, with regression coverage showing the same path works for unrelated repos such as a sample `AcmeFlow` workflow platform.
