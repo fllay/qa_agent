@@ -34,12 +34,32 @@ class ChatThread(BaseModel):
     updated_at: datetime
 
 
+class ChatMessage(BaseModel):
+    id: str
+    thread_id: str
+    role: Literal["user", "agent"]
+    text: str
+    created_at: datetime
+
+
 class ThreadCreate(BaseModel):
     title: str = Field(default="New thread", min_length=1, max_length=120)
 
 
+class ThreadMessageCreate(BaseModel):
+    text: str = Field(min_length=1)
+    max_context_items: int = Field(default=8, ge=1, le=30)
+
+
 class IngestRequest(BaseModel):
     kind: SourceKind
+    value: str
+
+
+class TopicSource(BaseModel):
+    id: str
+    kind: SourceKind
+    label: str
     value: str
 
 
@@ -63,6 +83,15 @@ class QuestionResponse(BaseModel):
     topic_id: str
     question: str
     answer: str
+    citations: list[Citation]
+    context_items: list[str]
+
+
+class ThreadMessageResponse(BaseModel):
+    thread_id: str
+    topic_id: str
+    user_message: ChatMessage
+    assistant_message: ChatMessage
     citations: list[Citation]
     context_items: list[str]
 

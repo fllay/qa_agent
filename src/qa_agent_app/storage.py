@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import ChatThread, LlmSettings, ThreadCreate, Topic, TopicCreate
+from .models import ChatMessage, ChatThread, LlmSettings, ThreadCreate, Topic, TopicCreate
 
 
 SCHEMA = """
@@ -32,6 +32,15 @@ CREATE TABLE IF NOT EXISTS chat_threads (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
 );
 """
 
@@ -126,6 +135,19 @@ class TopicStore:
             )
         return self.get_topic(topic_id)
 
+    def update_topic_description(self, topic_id: str, description: str) -> Topic:
+        self.get_topic(topic_id)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE topics
+                SET description = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (description.strip(), _now(), topic_id),
+            )
+        return self.get_topic(topic_id)
+
     def delete_topic(self, topic_id: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM topics WHERE id = ?", (topic_id,))
@@ -162,6 +184,49 @@ class TopicStore:
         if row is None:
             raise KeyError(thread_id)
         return _row_to_thread(row)
+
+    def list_messages(self, thread_id: str) -> list[ChatMessage]:
+        self.get_thread(thread_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC",
+                (thread_id,),
+            ).fetchall()
+        return [_row_to_message(row) for row in rows]
+
+    def append_message(self, thread_id: str, role: str, text: str) -> ChatMessage:
+        thread = self.get_thread(thread_id)
+        now = _now()
+        message_id = _slug_id(role)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_messages (id, thread_id, role, text, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (message_id, thread_id, role, text.strip(), now),
+            )
+            conn.execute("UPDATE chat_threads SET updated_at = ? WHERE id = ?", (now, thread_id))
+            conn.execute("UPDATE topics SET updated_at = ? WHERE id = ?", (now, thread.topic_id))
+        return self.get_message(message_id)
+
+    def get_message(self, message_id: str) -> ChatMessage:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+        if row is None:
+            raise KeyError(message_id)
+        return _row_to_message(row)
+
+    def rename_thread(self, thread_id: str, title: str) -> ChatThread:
+        thread = self.get_thread(thread_id)
+        now = _now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE chat_threads SET title = ?, updated_at = ? WHERE id = ?",
+                (title.strip(), now, thread_id),
+            )
+            conn.execute("UPDATE topics SET updated_at = ? WHERE id = ?", (now, thread.topic_id))
+        return self.get_thread(thread_id)
 
     def get_llm_settings(self, defaults: LlmSettings) -> LlmSettings:
         with self._connect() as conn:
@@ -220,4 +285,14 @@ def _row_to_thread(row: sqlite3.Row) -> ChatThread:
         title=row["title"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _row_to_message(row: sqlite3.Row) -> ChatMessage:
+    return ChatMessage(
+        id=row["id"],
+        thread_id=row["thread_id"],
+        role=row["role"],
+        text=row["text"],
+        created_at=datetime.fromisoformat(row["created_at"]),
     )

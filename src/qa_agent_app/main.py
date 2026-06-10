@@ -13,15 +13,19 @@ from .graphify_client import GraphifyClient
 from .github_collector import GitHubRepositoryCollector
 from .ingestion import IngestionService
 from .models import (
+    ChatMessage,
     ChatThread,
     IngestRequest,
     IngestResult,
     LlmSettings,
     QuestionRequest,
     QuestionResponse,
+    ThreadMessageCreate,
+    ThreadMessageResponse,
     ThreadCreate,
     Topic,
     TopicCreate,
+    TopicSource,
 )
 from .storage import TopicStore
 
@@ -133,6 +137,14 @@ def list_threads(topic_id: str | None = None, store: TopicStore = Depends(get_st
     return store.list_threads(topic_id)
 
 
+@app.get("/api/threads/{thread_id}/messages", response_model=list[ChatMessage])
+def list_thread_messages(thread_id: str, store: TopicStore = Depends(get_store)) -> list[ChatMessage]:
+    try:
+        return store.list_messages(thread_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
+
+
 @app.post("/api/topics/{topic_id}/threads", response_model=ChatThread)
 def create_thread(topic_id: str, payload: ThreadCreate, store: TopicStore = Depends(get_store)) -> ChatThread:
     try:
@@ -141,12 +153,76 @@ def create_thread(topic_id: str, payload: ThreadCreate, store: TopicStore = Depe
         raise HTTPException(status_code=404, detail="Topic not found") from exc
 
 
+@app.post("/api/threads/{thread_id}/messages", response_model=ThreadMessageResponse)
+def create_thread_message(
+    thread_id: str,
+    payload: ThreadMessageCreate,
+    store: TopicStore = Depends(get_store),
+    agent: QaAgent = Depends(get_agent),
+) -> ThreadMessageResponse:
+    try:
+        thread = store.get_thread(thread_id)
+        topic = store.get_topic(thread.topic_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
+
+    user_message = store.append_message(thread_id, "user", payload.text)
+    if thread.title.strip().lower() == "new chat":
+        trimmed_title = " ".join(payload.text.strip().split())
+        store.rename_thread(thread_id, trimmed_title[:80] or "New chat")
+
+    try:
+        response = agent.answer(topic, payload.text, payload.max_context_items)
+    except Exception as exc:
+        assistant_message = store.append_message(thread_id, "agent", str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    assistant_message = store.append_message(thread_id, "agent", response.answer)
+    return ThreadMessageResponse(
+        thread_id=thread_id,
+        topic_id=thread.topic_id,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        citations=response.citations,
+        context_items=response.context_items,
+    )
+
+
 @app.get("/api/topics/{topic_id}", response_model=Topic)
 def get_topic(topic_id: str, store: TopicStore = Depends(get_store)) -> Topic:
     try:
         return store.get_topic(topic_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc
+
+
+@app.get("/api/topics/{topic_id}/sources", response_model=list[TopicSource])
+def list_topic_sources(
+    topic_id: str,
+    store: TopicStore = Depends(get_store),
+    ingestion: IngestionService = Depends(get_ingestion),
+) -> list[TopicSource]:
+    try:
+        topic = store.get_topic(topic_id)
+        return ingestion.list_sources(topic)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Topic not found") from exc
+
+
+@app.delete("/api/topics/{topic_id}/sources/{source_id}", response_model=Topic)
+def delete_topic_source(
+    topic_id: str,
+    source_id: str,
+    store: TopicStore = Depends(get_store),
+    ingestion: IngestionService = Depends(get_ingestion),
+) -> Topic:
+    try:
+        topic = store.get_topic(topic_id)
+        return ingestion.remove_source(topic, source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Source not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/api/topics/{topic_id}", status_code=204)

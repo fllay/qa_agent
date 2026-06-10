@@ -7,9 +7,12 @@ let modalFiles = [];
 let settingsTopicId = null;
 let settingsSources = [];
 let settingsFiles = [];
+let currentTopicSources = [];
 let isCreatingTopic = false;
 let isUpdatingTopicSources = false;
 let topicPollTimer = null;
+let activeTopicMenuId = null;
+const expandedTopics = new Set();
 const threadSessions = new Map();
 
 const els = {
@@ -60,31 +63,10 @@ function getSession(threadId = activeThreadId) {
       draft: "",
       copiedId: null,
       scrollLocked: false,
+      loaded: key === "agent",
     });
   }
   return threadSessions.get(key);
-}
-
-function currentMessages() {
-  return getSession().messages;
-}
-
-function isPending() {
-  return getSession().pending;
-}
-
-function setPending(pending) {
-  getSession().pending = pending;
-  updateComposerState();
-  renderMessages();
-}
-
-function currentThreadLabel() {
-  if (activeThreadId === "agent") {
-    return "QA Agent";
-  }
-  const thread = threads.find((item) => item.id === activeThreadId);
-  return thread?.title || "Agent Chat";
 }
 
 async function api(path, options = {}) {
@@ -109,6 +91,9 @@ function showToast(message) {
 function setSidebarOpen(open) {
   els.sidebar.classList.toggle("is-collapsed", !open);
   els.shell.classList.toggle("sidebar-hidden", !open);
+  if (!open) {
+    activeTopicMenuId = null;
+  }
 }
 
 function saveDraft() {
@@ -121,8 +106,63 @@ function restoreDraft() {
   updateComposerState();
 }
 
+function currentThreadLabel() {
+  if (activeThreadId === "agent") {
+    return "QA Agent";
+  }
+  const thread = threads.find((item) => item.id === activeThreadId);
+  return thread?.title || "New chat";
+}
+
+function currentMessages() {
+  return getSession().messages;
+}
+
+function isPending() {
+  return getSession().pending;
+}
+
+function setPending(pending) {
+  getSession().pending = pending;
+  updateComposerState();
+  renderMessages();
+}
+
+function topicThreads(topicId) {
+  return threads.filter((thread) => thread.topic_id === topicId);
+}
+
+function normalizeMessages(items) {
+  return items.map((item) => ({
+    id: item.id,
+    role: item.role,
+    text: item.text,
+    createdAt: item.created_at,
+  }));
+}
+
+async function loadThreadMessages(threadId, { force = false } = {}) {
+  if (threadId === "agent") return;
+  const session = getSession(threadId);
+  if (session.loaded && !force) {
+    return;
+  }
+  const items = await api(`/api/threads/${threadId}/messages`);
+  session.messages = normalizeMessages(items);
+  session.loaded = true;
+  if (threadId === activeThreadId) {
+    renderMessages();
+    scrollMessagesToBottom(false);
+  }
+}
+
 async function loadData() {
   [topics, threads] = await Promise.all([api("/api/topics"), api("/api/threads")]);
+  for (const topic of topics) {
+    if (!expandedTopics.has(topic.id)) {
+      expandedTopics.add(topic.id);
+    }
+  }
   renderTopicTree();
   syncActiveTopicState();
   scheduleTopicPolling();
@@ -133,55 +173,115 @@ function renderTopicTree() {
   for (const topic of topics) {
     const group = document.createElement("section");
     group.className = "topic-group";
+
     const header = document.createElement("div");
     header.className = "topic-group-header";
-    const title = document.createElement("p");
-    title.className = "topic-title";
-    title.textContent = topic.name;
-    header.append(title);
+
+    const folderButton = document.createElement("button");
+    folderButton.type = "button";
+    folderButton.className = "topic-folder-button";
+    folderButton.innerHTML = `
+      <span class="topic-folder-arrow">${expandedTopics.has(topic.id) ? "▾" : "▸"}</span>
+      <span class="topic-title">${escapeHtml(topic.name)}</span>
+    `;
+    folderButton.addEventListener("click", () => {
+      if (expandedTopics.has(topic.id)) {
+        expandedTopics.delete(topic.id);
+      } else {
+        expandedTopics.add(topic.id);
+      }
+      renderTopicTree();
+    });
+    header.append(folderButton);
 
     const actions = document.createElement("div");
     actions.className = "topic-group-actions";
 
-    const settingsButton = document.createElement("button");
-    settingsButton.type = "button";
-    settingsButton.className = "topic-action-button";
-    settingsButton.textContent = "Settings";
-    settingsButton.addEventListener("click", () => openTopicSettings(topic.id));
-    actions.append(settingsButton);
+    const menuShell = document.createElement("div");
+    menuShell.className = "topic-menu-shell";
 
-    const deleteButton = document.createElement("button");
-    deleteButton.type = "button";
-    deleteButton.className = "topic-action-button topic-action-delete";
-    deleteButton.textContent = "Delete";
-    deleteButton.addEventListener("click", () => deleteTopic(topic.id));
-    actions.append(deleteButton);
+    const menuButton = document.createElement("button");
+    menuButton.type = "button";
+    menuButton.className = `topic-menu-button ${activeTopicMenuId === topic.id ? "is-open" : ""}`;
+    menuButton.setAttribute("aria-label", `Open menu for ${topic.name}`);
+    menuButton.textContent = "...";
+    menuButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      activeTopicMenuId = activeTopicMenuId === topic.id ? null : topic.id;
+      renderTopicTree();
+    });
+    menuShell.append(menuButton);
+
+    if (activeTopicMenuId === topic.id) {
+      const menu = document.createElement("div");
+      menu.className = "topic-menu-popover";
+      menu.innerHTML = `
+        <button type="button" class="topic-menu-item" data-topic-action="new-chat" data-topic-id="${topic.id}">New chat</button>
+        <button type="button" class="topic-menu-item" data-topic-action="settings" data-topic-id="${topic.id}">Settings</button>
+        <button type="button" class="topic-menu-item topic-menu-item-danger" data-topic-action="delete" data-topic-id="${topic.id}">Delete</button>
+      `;
+      menuShell.append(menu);
+    }
+
+    actions.append(menuShell);
 
     header.append(actions);
     group.append(header);
 
-    const topicThreads = threads.filter((thread) => thread.topic_id === topic.id);
-    for (const thread of topicThreads) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `thread-button ${thread.id === activeThreadId ? "active" : ""}`;
-      button.innerHTML = `<span>${escapeHtml(thread.title)}</span><small>${escapeHtml(topicStatusText(topic))}</small>`;
-      button.addEventListener("click", () => selectThread(topic.id, thread.id));
-      group.append(button);
+    if (expandedTopics.has(topic.id)) {
+      const body = document.createElement("div");
+      body.className = "topic-thread-list";
+      for (const thread of topicThreads(topic.id)) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `thread-button ${thread.id === activeThreadId ? "active" : ""}`;
+        button.innerHTML = `<span>${escapeHtml(thread.title)}</span><small>${escapeHtml(topicStatusText(topic))}</small>`;
+        button.addEventListener("click", () => selectThread(topic.id, thread.id));
+        body.append(button);
+      }
+      group.append(body);
     }
+
     els.topicTree.append(group);
   }
+
+  els.topicTree.querySelectorAll("[data-topic-action]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const { topicId, topicAction } = button.dataset;
+      activeTopicMenuId = null;
+      renderTopicTree();
+      if (!topicId) return;
+      if (topicAction === "new-chat") {
+        await createTopicThread(topicId);
+        return;
+      }
+      if (topicAction === "settings") {
+        openTopicSettings(topicId);
+        return;
+      }
+      if (topicAction === "delete") {
+        await deleteTopic(topicId);
+      }
+    });
+  });
 }
 
-function selectThread(topicId, threadId) {
+async function selectThread(topicId, threadId) {
   saveDraft();
   activeTopicId = topicId;
   activeThreadId = threadId;
   els.agentThread.classList.remove("active");
+  expandedTopics.add(topicId);
   updateComposerHint(topicId);
   renderTopicTree();
   restoreDraft();
   renderMessages();
+  try {
+    await loadThreadMessages(threadId);
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 function selectAgentChat() {
@@ -205,12 +305,29 @@ async function createTopic(name, sources = []) {
   });
   await loadData();
   const defaultThread = threads.find((thread) => thread.topic_id === topic.id && thread.title === "Agent Chat");
-  selectThread(topic.id, defaultThread?.id || "agent");
+  await selectThread(topic.id, defaultThread?.id || "agent");
   if (sources.length) {
     markTopicIndexing(topic.id);
     void runTopicSetup(topic.id, topic.name, sources);
   }
   return topic;
+}
+
+async function createTopicThread(topicId) {
+  const topic = topics.find((item) => item.id === topicId);
+  if (!topic) return;
+  try {
+    const thread = await api(`/api/topics/${topicId}/threads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "New chat" }),
+    });
+    threadSessions.delete(thread.id);
+    await loadData();
+    await selectThread(topicId, thread.id);
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 async function runTopicSetup(topicId, topicName, sources) {
@@ -264,50 +381,10 @@ function buildMessage(role, text, extra = {}) {
   };
 }
 
-function addMessage(role, text, extra = {}) {
+function pushLocalMessage(role, text, extra = {}) {
   getSession().messages.push(buildMessage(role, text, extra));
   renderMessages();
   scrollMessagesToBottom(true);
-}
-
-function replaceAssistantMessage(messageId, text) {
-  const session = getSession();
-  const target = session.messages.find((message) => message.id === messageId);
-  if (target) {
-    target.text = text;
-    target.refreshing = false;
-  }
-  renderMessages();
-}
-
-async function resendAssistantResponse(messageId) {
-  const session = getSession();
-  if (session.pending || activeThreadId === "agent") {
-    return;
-  }
-  const index = session.messages.findIndex((message) => message.id === messageId);
-  if (index === -1) return;
-  const sourceMessage = [...session.messages.slice(0, index)].reverse().find((message) => message.role === "user");
-  if (!sourceMessage) return;
-  const target = session.messages[index];
-  target.refreshing = true;
-  session.pending = true;
-  updateComposerState();
-  renderMessages();
-  try {
-    const answer = await api(`/api/topics/${activeTopicId}/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: sourceMessage.text }),
-    });
-    replaceAssistantMessage(messageId, answer.answer);
-  } catch (error) {
-    replaceAssistantMessage(messageId, error.message);
-  } finally {
-    session.pending = false;
-    updateComposerState();
-    renderMessages();
-  }
 }
 
 async function copyMessage(messageId) {
@@ -325,13 +402,12 @@ async function copyMessage(messageId) {
         renderMessages();
       }
     }, 1500);
-  } catch (error) {
+  } catch {
     showToast("Copy failed.");
   }
 }
 
 els.agentThread.addEventListener("click", selectAgentChat);
-
 els.openSidebar.addEventListener("click", () => setSidebarOpen(true));
 els.closeSidebar.addEventListener("click", () => setSidebarOpen(false));
 
@@ -345,7 +421,6 @@ els.manualTopic.addEventListener("click", () => {
 
 els.closeModal.addEventListener("click", () => els.modal.close());
 els.closeSettingsModal.addEventListener("click", () => els.settingsModal.close());
-
 els.modalAddSource.addEventListener("click", addModalSourceFromInput);
 els.settingsAddSource.addEventListener("click", addSettingsSourceFromInput);
 
@@ -409,10 +484,10 @@ els.chatForm.addEventListener("submit", async (event) => {
   els.chatInput.value = "";
   session.draft = "";
   autoResizeComposer();
-  addMessage("user", text);
-  setPending(true);
 
   if (activeThreadId === "agent") {
+    pushLocalMessage("user", text);
+    setPending(true);
     const topicName = text.length > 80 ? `${text.slice(0, 77)}...` : text;
     try {
       const agentSession = getSession("agent");
@@ -421,9 +496,7 @@ els.chatForm.addEventListener("submit", async (event) => {
         agentSession.messages.pop();
       }
       const topicSession = getSession(activeThreadId);
-      if (!topicSession.messages.length) {
-        topicSession.messages.push(buildMessage("user", text));
-      }
+      topicSession.messages.push(buildMessage("user", text));
       topicSession.messages.push(
         buildMessage("agent", `Created topic "${topic.name}". Add sources or use Create topic to upload docs.`),
       );
@@ -431,7 +504,7 @@ els.chatForm.addEventListener("submit", async (event) => {
       scrollMessagesToBottom(true);
       showToast(`Created topic "${topic.name}".`);
     } catch (error) {
-      addMessage("agent", error.message);
+      pushLocalMessage("agent", error.message);
     } finally {
       setPending(false);
     }
@@ -440,20 +513,37 @@ els.chatForm.addEventListener("submit", async (event) => {
 
   const topic = topics.find((item) => item.id === activeTopicId);
   if (!topic || topic.status !== "ready") {
-    addMessage("agent", topicUnavailableMessage(topic));
-    setPending(false);
+    pushLocalMessage("user", text);
+    pushLocalMessage("agent", topicUnavailableMessage(topic));
     return;
   }
 
+  pushLocalMessage("user", text);
+  setPending(true);
   try {
-    const answer = await api(`/api/topics/${activeTopicId}/ask`, {
+    const response = await api(`/api/threads/${activeThreadId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: text }),
+      body: JSON.stringify({ text }),
     });
-    addMessage("agent", answer.answer);
+    const latest = getSession();
+    latest.messages = normalizeMessages([
+      ...latest.messages
+        .filter((message) => !(message.role === "user" && message.text === text && String(message.id).startsWith("user-")))
+        .map((message) => ({
+          id: message.id,
+          role: message.role,
+          text: message.text,
+          created_at: message.createdAt,
+        })),
+      response.user_message,
+      response.assistant_message,
+    ]);
+    await loadData();
+    renderMessages();
+    scrollMessagesToBottom(true);
   } catch (error) {
-    addMessage("agent", error.message);
+    pushLocalMessage("agent", error.message);
   } finally {
     setPending(false);
   }
@@ -506,6 +596,22 @@ els.messages.addEventListener("scroll", () => {
 
 els.scrollButton.addEventListener("click", () => scrollMessagesToBottom(true));
 
+document.addEventListener("click", (event) => {
+  if (!activeTopicMenuId) {
+    return;
+  }
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    activeTopicMenuId = null;
+    renderTopicTree();
+    return;
+  }
+  if (!target.closest(".topic-menu-shell")) {
+    activeTopicMenuId = null;
+    renderTopicTree();
+  }
+});
+
 function addModalSourceFromInput() {
   const value = els.modalTopicSource.value.trim();
   if (!value) return;
@@ -556,30 +662,91 @@ function addSettingsFile(file) {
 
 function renderModalSources() {
   els.modalSourceList.innerHTML = "";
-  for (const source of modalSources) {
+  for (const [index, source] of modalSources.entries()) {
     const item = document.createElement("li");
-    item.textContent = source;
+    item.innerHTML = `
+      <span>${escapeHtml(source)}</span>
+      <button type="button" class="source-remove-button" data-modal-source-index="${index}" aria-label="Remove source">×</button>
+    `;
     els.modalSourceList.append(item);
   }
-  for (const file of modalFiles) {
+  for (const [index, file] of modalFiles.entries()) {
     const item = document.createElement("li");
-    item.textContent = `Upload: ${file.name}`;
+    item.innerHTML = `
+      <span>Upload: ${escapeHtml(file.name)}</span>
+      <button type="button" class="source-remove-button" data-modal-file-index="${index}" aria-label="Remove upload">×</button>
+    `;
     els.modalSourceList.append(item);
   }
+  els.modalSourceList.querySelectorAll("[data-modal-source-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      modalSources.splice(Number(button.dataset.modalSourceIndex), 1);
+      renderModalSources();
+    });
+  });
+  els.modalSourceList.querySelectorAll("[data-modal-file-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      modalFiles.splice(Number(button.dataset.modalFileIndex), 1);
+      renderModalSources();
+    });
+  });
 }
 
 function renderSettingsSources() {
   els.settingsSourceList.innerHTML = "";
-  for (const source of settingsSources) {
+  for (const source of currentTopicSources) {
     const item = document.createElement("li");
-    item.textContent = source;
+    item.innerHTML = `
+      <span>${escapeHtml(source.kind === "upload" ? `Upload: ${source.label}` : source.value)}</span>
+      <button type="button" class="source-remove-button" data-current-source-id="${source.id}" aria-label="Delete source">×</button>
+    `;
     els.settingsSourceList.append(item);
   }
-  for (const file of settingsFiles) {
+  for (const [index, source] of settingsSources.entries()) {
     const item = document.createElement("li");
-    item.textContent = `Upload: ${file.name}`;
+    item.innerHTML = `
+      <span>${escapeHtml(source)}</span>
+      <button type="button" class="source-remove-button" data-settings-source-index="${index}" aria-label="Remove source">×</button>
+    `;
     els.settingsSourceList.append(item);
   }
+  for (const [index, file] of settingsFiles.entries()) {
+    const item = document.createElement("li");
+    item.innerHTML = `
+      <span>Upload: ${escapeHtml(file.name)}</span>
+      <button type="button" class="source-remove-button" data-settings-file-index="${index}" aria-label="Remove upload">×</button>
+    `;
+    els.settingsSourceList.append(item);
+  }
+  els.settingsSourceList.querySelectorAll("[data-settings-source-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      settingsSources.splice(Number(button.dataset.settingsSourceIndex), 1);
+      renderSettingsSources();
+    });
+  });
+  els.settingsSourceList.querySelectorAll("[data-settings-file-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      settingsFiles.splice(Number(button.dataset.settingsFileIndex), 1);
+      renderSettingsSources();
+    });
+  });
+  els.settingsSourceList.querySelectorAll("[data-current-source-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!settingsTopicId) return;
+      try {
+        await api(`/api/topics/${settingsTopicId}/sources/${button.dataset.currentSourceId}`, { method: "DELETE" });
+        currentTopicSources = currentTopicSources.filter((item) => item.id !== button.dataset.currentSourceId);
+        await loadData();
+        renderSettingsSources();
+        if (activeTopicId === settingsTopicId) {
+          updateComposerHint(settingsTopicId);
+        }
+        showToast("Source removed.");
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+  });
 }
 
 function openTopicSettings(topicId) {
@@ -588,10 +755,17 @@ function openTopicSettings(topicId) {
   settingsTopicId = topicId;
   settingsSources = [];
   settingsFiles = [];
+  currentTopicSources = [];
   renderSettingsSources();
   els.settingsForm.reset();
   els.settingsTitle.textContent = `Topic settings: ${topic.name}`;
   els.settingsModal.showModal();
+  void api(`/api/topics/${topicId}/sources`)
+    .then((sources) => {
+      currentTopicSources = sources;
+      renderSettingsSources();
+    })
+    .catch((error) => showToast(error.message));
 }
 
 async function deleteTopic(topicId) {
@@ -602,6 +776,9 @@ async function deleteTopic(topicId) {
   }
   try {
     await api(`/api/topics/${topicId}`, { method: "DELETE" });
+    for (const thread of topicThreads(topicId)) {
+      threadSessions.delete(thread.id);
+    }
     await loadData();
     if (activeTopicId === topicId) {
       selectAgentChat();
@@ -632,7 +809,7 @@ function updateComposerHint(topicId) {
   const topic = topics.find((item) => item.id === topicId);
   els.composerHint.textContent =
     topic?.status === "ready"
-      ? "Ask this topic using its graph context."
+      ? `Ask in ${currentThreadLabel()}.`
       : topic?.status === "error"
         ? formatUiMessage(topic.last_error || "Topic setup failed. Update the sources or server configuration.")
         : topic?.progress_label
@@ -650,20 +827,9 @@ function setSettingsBusy(busy, label) {
   els.settingsSubmit.textContent = label;
 }
 
-function canRefreshMessage(messageIndex, session) {
-  if (activeThreadId === "agent" || session.pending) {
-    return false;
-  }
-  const message = session.messages[messageIndex];
-  if (message.role !== "agent") {
-    return false;
-  }
-  return session.messages.slice(0, messageIndex).some((item) => item.role === "user");
-}
-
 function renderMessages() {
   const session = getSession();
-  const messages = session.messages;
+  const messages = currentMessages();
   els.messages.classList.toggle("is-empty", !messages.length);
   els.messages.classList.toggle("has-messages", messages.length > 0);
   if (!messages.length) {
@@ -680,33 +846,26 @@ function renderMessages() {
   els.messages.innerHTML = `
     <div class="message-list">
       ${messages
-        .map((message, index) => {
-          const actions =
-            message.role === "agent"
-              ? `
-                <div class="message-actions">
-                  <button class="message-action" type="button" data-copy-id="${message.id}">
-                    ${session.copiedId === message.id ? "Copied" : "Copy"}
-                  </button>
-                  ${
-                    canRefreshMessage(index, session)
-                      ? `<button class="message-action" type="button" data-refresh-id="${message.id}">
-                          ${message.refreshing ? "Refreshing..." : "Refresh"}
-                        </button>`
-                      : ""
-                  }
-                </div>
-              `
-              : "";
-          return `
+        .map(
+          (message) => `
             <article class="message-row ${message.role}">
               <div class="message ${message.role}">
                 <div class="message-body">${escapeHtml(message.text)}</div>
-                ${actions}
+                ${
+                  message.role === "agent"
+                    ? `
+                      <div class="message-actions">
+                        <button class="message-action" type="button" data-copy-id="${message.id}">
+                          ${session.copiedId === message.id ? "Copied" : "Copy"}
+                        </button>
+                      </div>
+                    `
+                    : ""
+                }
               </div>
             </article>
-          `;
-        })
+          `,
+        )
         .join("")}
       ${
         session.pending
@@ -726,9 +885,6 @@ function renderMessages() {
 
   els.messages.querySelectorAll("[data-copy-id]").forEach((button) => {
     button.addEventListener("click", () => copyMessage(button.dataset.copyId));
-  });
-  els.messages.querySelectorAll("[data-refresh-id]").forEach((button) => {
-    button.addEventListener("click", () => resendAssistantResponse(button.dataset.refreshId));
   });
   if (!session.scrollLocked || session.pending) {
     scrollMessagesToBottom(false);
@@ -785,10 +941,12 @@ function syncActiveTopicState() {
     return;
   }
   const topic = topics.find((item) => item.id === activeTopicId);
-  if (!topic) {
+  const thread = threads.find((item) => item.id === activeThreadId);
+  if (!topic || !thread) {
     selectAgentChat();
     return;
   }
+  expandedTopics.add(topic.id);
   updateComposerHint(activeTopicId);
 }
 
@@ -841,8 +999,8 @@ function formatUiMessage(message) {
   if (text.includes("Graphify command") && text.includes("was not found")) {
     return "Graphify is not installed or not configured on this server.";
   }
-  if (text.length > 140) {
-    return `${text.slice(0, 137)}...`;
+  if (text.length > 180) {
+    return `${text.slice(0, 177)}...`;
   }
   return text;
 }

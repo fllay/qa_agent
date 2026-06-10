@@ -79,3 +79,10 @@
 - Removed OCUDU-specific fallback extraction logic and replaced it with generic descriptive-sentence extraction from repository context, with regression coverage showing the same path works for unrelated repos such as a sample `AcmeFlow` workflow platform.
 - Reworked the chat-session frontend to behave more like `agent-chat-ui`: each thread now keeps its own local session transcript and draft, the composer auto-resizes and disables while requests are in flight, assistant replies expose inline copy/refresh actions, and the transcript uses a sticky bottom chat layout with loading and scroll-to-bottom behavior.
 - Removed the regressed top chat-page title from the session layout so the empty state no longer shows a duplicate `Agent Chat` heading above the main content.
+- Widened the chat sidebar again and changed topics into folder-style groups that expand to show their saved threads, with a per-topic `New chat` action for creating additional chats inside the same topic.
+- Added SQLite-backed thread message persistence plus `/api/threads/{thread_id}/messages` load/send APIs, so topic chats now reload with saved history instead of relying on browser-only session state.
+- Replaced the always-visible topic action pills with a hover/focus topic-row shell and an overflow popup menu that contains `New chat`, `Settings`, and `Delete`, matching the reference-style sidebar interaction more closely.
+- Added topic source listing/removal support in the settings modal, backed by a per-topic source manifest and delete API so current sources are visible and removable with an `x` control.
+- Added removable queued-source pills in the create-topic modal so URLs and uploaded files can be removed before submitting the topic.
+- Added manifest backfill for pre-existing topics so the settings modal can reconstruct current sources from old topic descriptions and on-disk source folders, including archived-repo handoffs such as `srsRAN_Project -> https://gitlab.com/ocudu/ocudu`.
+- Normalized new-chat renaming to use the first user message as the saved thread title with collapsed whitespace.

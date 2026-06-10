@@ -1,6 +1,8 @@
 import shutil
 import subprocess
 import re
+import json
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -9,7 +11,7 @@ from fastapi import UploadFile
 from .fallback_graph import build_fallback_graph
 from .graphify_client import GraphifyClient, GraphifyError
 from .github_collector import GitHubRepositoryCollector
-from .models import IngestRequest, Topic
+from .models import IngestRequest, Topic, TopicSource
 from .storage import TopicStore
 
 
@@ -29,6 +31,77 @@ class IngestionService:
     def topic_dir(self, topic_id: str) -> Path:
         return self.topics_dir / topic_id
 
+    def list_sources(self, topic: Topic) -> list[TopicSource]:
+        topic_dir = self.topic_dir(topic.id)
+        source_dir = self._ensure_source_dir(topic_dir)
+        manifest = self._load_manifest(topic_dir)
+        if not manifest:
+            manifest = self._bootstrap_manifest(topic, topic_dir, source_dir)
+        results: list[TopicSource] = []
+        valid_entries: list[dict] = []
+
+        for entry in manifest:
+            source_path = source_dir / entry["path"]
+            if source_path.exists():
+                valid_entries.append(entry)
+                results.append(
+                    TopicSource(
+                        id=entry["id"],
+                        kind=entry["kind"],
+                        label=entry["label"],
+                        value=entry["value"],
+                    )
+                )
+
+        if len(valid_entries) != len(manifest):
+            self._save_manifest(topic_dir, valid_entries)
+        return results
+
+    def remove_source(self, topic: Topic, source_id: str) -> Topic:
+        topic_dir = self.topic_dir(topic.id)
+        source_dir = self._ensure_source_dir(topic_dir)
+        manifest = self._load_manifest(topic_dir)
+        remaining = []
+        target = None
+        for entry in manifest:
+            if entry["id"] == source_id:
+                target = entry
+            else:
+                remaining.append(entry)
+        if target is None:
+            raise KeyError(source_id)
+
+        source_path = source_dir / target["path"]
+        if source_path.exists():
+            if source_path.is_dir():
+                shutil.rmtree(source_path, ignore_errors=True)
+            else:
+                source_path.unlink(missing_ok=True)
+        self._save_manifest(topic_dir, remaining)
+        self.store.update_topic_description(
+            topic.id,
+            "\n".join(entry["value"] for entry in remaining if entry["kind"] != "upload"),
+        )
+
+        if any(source_dir.iterdir()):
+            graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
+            return self.store.update_topic(
+                topic.id,
+                status="ready",
+                progress_percent=100,
+                progress_label="Ready",
+                graph_path=str(graph_path),
+                last_error=None,
+            )
+        return self.store.update_topic(
+            topic.id,
+            status="new",
+            progress_percent=0,
+            progress_label="",
+            graph_path=None,
+            last_error=None,
+        )
+
     def ingest(self, topic: Topic, request: IngestRequest) -> Topic:
         topic_dir = self.topic_dir(topic.id)
         source_dir = self._ensure_source_dir(topic_dir)
@@ -41,6 +114,7 @@ class IngestionService:
                 self._set_progress(topic.id, 22, "Cloning repository")
                 repo_dir = self._unique_path(source_dir, self._slug_name(Path(request.value).stem or "github-repo"))
                 self._clone_repo(request.value, repo_dir)
+                self._register_source(topic_dir, "github", request.value, request.value, repo_dir.relative_to(source_dir).as_posix())
                 self._set_progress(topic.id, 30, "Collecting GitHub context")
                 self.github_collector.collect(
                     request.value,
@@ -59,13 +133,28 @@ class IngestionService:
                         self._slug_name(Path(replacement_url).stem or "active-repo"),
                     )
                     self._clone_repo(replacement_url, replacement_dir)
+                    self._register_source(
+                        topic_dir,
+                        "github",
+                        replacement_url,
+                        replacement_url,
+                        replacement_dir.relative_to(source_dir).as_posix(),
+                    )
             elif request.kind == "local_path":
                 self._set_progress(topic.id, 35, "Copying local source")
                 source_path = Path(request.value)
                 target_dir = self._unique_path(source_dir, source_path.stem or source_path.name or "local-source")
                 self._copy_local_path(source_path, target_dir)
+                self._register_source(
+                    topic_dir,
+                    "local_path",
+                    source_path.name,
+                    request.value,
+                    target_dir.relative_to(source_dir).as_posix(),
+                )
             else:
                 raise ValueError("Upload ingestion must use the upload endpoint.")
+            self._sync_topic_description(topic.id, topic_dir)
             self._set_progress(topic.id, 82, "Building graph")
             graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
             self._set_progress(topic.id, 96, "Finalizing graph", graph_path=str(graph_path))
@@ -102,7 +191,15 @@ class IngestionService:
                 with target.open("wb") as output:
                     while chunk := await upload.read(1024 * 1024):
                         output.write(chunk)
+                self._register_source(
+                    topic_dir,
+                    "upload",
+                    safe_name,
+                    safe_name,
+                    target.relative_to(source_dir).as_posix(),
+                )
                 self._set_progress(topic.id, 15 + int((index / total_files) * 55), f"Uploaded {safe_name}")
+            self._sync_topic_description(topic.id, topic_dir)
             self._set_progress(topic.id, 82, "Building graph")
             graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
             self._set_progress(topic.id, 96, "Finalizing graph", graph_path=str(graph_path))
@@ -242,6 +339,95 @@ class IngestionService:
         if repo_hint:
             return repo_hint
         return None
+
+    @staticmethod
+    def _manifest_path(topic_dir: Path) -> Path:
+        return topic_dir / "sources.json"
+
+    def _load_manifest(self, topic_dir: Path) -> list[dict]:
+        path = self._manifest_path(topic_dir)
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+
+    def _save_manifest(self, topic_dir: Path, entries: list[dict]) -> None:
+        self._manifest_path(topic_dir).write_text(json.dumps(entries, indent=2), encoding="utf-8")
+
+    def _manifest_entry(self, kind: str, label: str, value: str, relative_path: str) -> dict:
+        return {
+            "id": uuid.uuid4().hex[:12],
+            "kind": kind,
+            "label": label,
+            "value": value,
+            "path": relative_path,
+        }
+
+    def _bootstrap_manifest(self, topic: Topic, topic_dir: Path, source_dir: Path) -> list[dict]:
+        entries: list[dict] = []
+        remaining: dict[str, Path] = {child.name: child for child in source_dir.iterdir()} if source_dir.exists() else {}
+        description_values = [line.strip() for line in topic.description.splitlines() if line.strip()]
+        replacement_urls = []
+        for child in remaining.values():
+            if child.is_dir():
+                replacement_url = self._detect_repository_replacement(child)
+                if replacement_url:
+                    replacement_urls.append(replacement_url)
+
+        for value in description_values:
+            matched = self._match_existing_source_path(value, remaining)
+            if matched is None:
+                continue
+            entries.append(self._manifest_entry("github", value, value, matched.name))
+            remaining.pop(matched.name, None)
+
+        for replacement_url in replacement_urls:
+            matched = self._match_existing_source_path(replacement_url, remaining)
+            if matched is None:
+                continue
+            entries.append(self._manifest_entry("github", replacement_url, replacement_url, matched.name))
+            remaining.pop(matched.name, None)
+
+        for child in remaining.values():
+            if child.is_dir():
+                replacement_url = self._detect_repository_replacement(child)
+                if replacement_url:
+                    entries.append(self._manifest_entry("github", replacement_url, replacement_url, child.name))
+                else:
+                    entries.append(self._manifest_entry("local_path", child.name, child.name, child.name))
+            else:
+                entries.append(self._manifest_entry("upload", child.name, child.name, child.name))
+
+        if entries:
+            self._save_manifest(topic_dir, entries)
+        return entries
+
+    def _match_existing_source_path(self, value: str, remaining: dict[str, Path]) -> Path | None:
+        parsed = urlsplit(value)
+        candidates = []
+        if parsed.path:
+            path_name = Path(parsed.path)
+            candidates.append(self._slug_name(path_name.stem or path_name.name))
+        candidates.append(self._slug_name(value))
+
+        for child in remaining.values():
+            child_slug = self._slug_name(child.name)
+            for candidate in candidates:
+                if candidate and (child_slug == candidate or candidate in child_slug or child_slug in candidate):
+                    return child
+        return None
+
+    def _register_source(self, topic_dir: Path, kind: str, label: str, value: str, relative_path: str) -> None:
+        manifest = self._load_manifest(topic_dir)
+        manifest.append(self._manifest_entry(kind, label, value, relative_path))
+        self._save_manifest(topic_dir, manifest)
+
+    def _sync_topic_description(self, topic_id: str, topic_dir: Path) -> None:
+        manifest = self._load_manifest(topic_dir)
+        description = "\n".join(entry["value"] for entry in manifest if entry["kind"] != "upload")
+        self.store.update_topic_description(topic_id, description)
 
     @classmethod
     def _diagnose_archived_repository(cls, source_dir: Path) -> str | None:
