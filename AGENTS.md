@@ -130,3 +130,4 @@
 - Restored Show graph hover popup positioning to the mouse cursor while keeping the newer dense-graph hover hit-testing improvements.
 - Tightened Show graph hover detection in dense areas by choosing the nearest node under the cursor instead of the first overlapping hit target, reducing wrong-node tooltips.
 - Expanded the Show graph hover popup width cap and allowed long labels to wrap, then reverted the later cursor-centering tweak so positioning stays on the simpler mouse-offset behavior.
+- Changed new topic creation so the initial per-topic thread is stored and shown as `New chat` instead of `Agent Chat`, and updated the storage regression test plus frontend thread selection logic to match.

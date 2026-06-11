@@ -13,7 +13,7 @@ def test_topic_lifecycle(tmp_path):
     assert store.get_topic(topic.id).description == "API docs"
     default_threads = store.list_threads(topic.id)
     assert len(default_threads) == 1
-    assert default_threads[0].title == "Agent Chat"
+    assert default_threads[0].title == "New chat"
 
     updated = store.update_topic(topic.id, status="indexing", progress_percent=44, progress_label="Collecting GitHub context")
     assert updated.progress_percent == 44

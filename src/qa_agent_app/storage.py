@@ -77,11 +77,11 @@ class TopicStore:
                 """,
                 (topic_id, payload.name.strip(), payload.description.strip(), now, now),
             )
-            thread_id = _slug_id("Agent Chat")
+            thread_id = _slug_id("New chat")
             conn.execute(
                 """
                 INSERT INTO chat_threads (id, topic_id, title, created_at, updated_at)
-                VALUES (?, ?, 'Agent Chat', ?, ?)
+                VALUES (?, ?, 'New chat', ?, ?)
                 """,
                 (thread_id, topic_id, now, now),
             )

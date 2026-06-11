@@ -331,7 +331,7 @@ async function createTopic(name, sources = []) {
     body: JSON.stringify({ name, description }),
   });
   await loadData();
-  const defaultThread = threads.find((thread) => thread.topic_id === topic.id && thread.title === "Agent Chat");
+  const defaultThread = threads.find((thread) => thread.topic_id === topic.id && thread.title === "New chat");
   await selectThread(topic.id, defaultThread?.id || "agent");
   if (sources.length) {
     markTopicIndexing(topic.id);
