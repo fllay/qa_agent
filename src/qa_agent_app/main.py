@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .agent import QaAgent
 from .config import Settings, get_settings
+from .graph_loader import graph_preview_limits, load_graph_preview
 from .graphify_client import GraphifyClient
 from .github_collector import GitHubRepositoryCollector
 from .ingestion import IngestionService
@@ -25,6 +26,7 @@ from .models import (
     ThreadCreate,
     Topic,
     TopicCreate,
+    TopicGraphResponse,
     TopicSource,
 )
 from .storage import TopicStore
@@ -33,6 +35,28 @@ app = FastAPI(title="QA Agent", version="0.1.0")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def _resolve_topic_graph_path(topic: Topic, topics_dir: Path) -> Path | None:
+    topic_dir = topics_dir / topic.id
+    candidates: list[Path] = []
+
+    if topic.graph_path:
+        saved = Path(topic.graph_path)
+        if not saved.is_absolute():
+            saved = (topic_dir / saved).resolve()
+        candidates.append(saved)
+
+    if topic_dir.exists():
+        candidates.extend(topic_dir.rglob("graph.json"))
+        fallback = topic_dir / "fallback-graph.json"
+        if fallback.exists():
+            candidates.append(fallback)
+
+    existing = [path for path in candidates if path.exists() and path.is_file()]
+    if not existing:
+        return None
+    return max(existing, key=lambda path: path.stat().st_mtime)
 
 
 def get_store(settings: Settings = Depends(get_settings)) -> TopicStore:
@@ -188,6 +212,41 @@ def create_thread_message(
     )
 
 
+@app.post("/api/threads/{thread_id}/messages/{message_id}/refresh", response_model=ChatMessage)
+def refresh_thread_message(
+    thread_id: str,
+    message_id: str,
+    payload: ThreadMessageCreate,
+    store: TopicStore = Depends(get_store),
+    agent: QaAgent = Depends(get_agent),
+) -> ChatMessage:
+    try:
+        thread = store.get_thread(thread_id)
+        topic = store.get_topic(thread.topic_id)
+        messages = store.list_messages(thread_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
+
+    target_index = next((index for index, item in enumerate(messages) if item.id == message_id), None)
+    if target_index is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    target_message = messages[target_index]
+    if target_message.role != "agent":
+        raise HTTPException(status_code=400, detail="Only assistant messages can be refreshed")
+
+    prior_user = next((item for item in reversed(messages[:target_index]) if item.role == "user"), None)
+    if prior_user is None:
+        raise HTTPException(status_code=400, detail="No user message found for refresh")
+
+    try:
+        response = agent.answer(topic, prior_user.text, payload.max_context_items)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return store.update_message_text(message_id, response.answer)
+
+
 @app.get("/api/topics/{topic_id}", response_model=Topic)
 def get_topic(topic_id: str, store: TopicStore = Depends(get_store)) -> Topic:
     try:
@@ -207,6 +266,28 @@ def list_topic_sources(
         return ingestion.list_sources(topic)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc
+
+
+@app.get("/api/topics/{topic_id}/graph", response_model=TopicGraphResponse)
+def get_topic_graph(
+    topic_id: str,
+    settings: Settings = Depends(get_settings),
+    store: TopicStore = Depends(get_store),
+) -> TopicGraphResponse:
+    try:
+        topic = store.get_topic(topic_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Topic not found") from exc
+
+    graph_path = _resolve_topic_graph_path(topic, settings.topics_dir)
+    if graph_path is None:
+        raise HTTPException(status_code=404, detail="Saved graph file was not found for this topic.")
+
+    try:
+        max_nodes, max_edges = graph_preview_limits(graph_path)
+        return load_graph_preview(topic.id, topic.name, graph_path, max_nodes=max_nodes, max_edges=max_edges)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not load the saved graph: {exc}") from exc
 
 
 @app.delete("/api/topics/{topic_id}/sources/{source_id}", response_model=Topic)

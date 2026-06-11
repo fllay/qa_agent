@@ -96,7 +96,7 @@ def build_fallback_graph(topic_dir: Path, source_dir: Path) -> Path:
     return graph_path
 
 
-def _select_files(repo_dir: Path, limit: int = 240) -> list[Path]:
+def _select_files(repo_dir: Path) -> list[Path]:
     candidates: list[tuple[int, Path]] = []
     for path in repo_dir.rglob("*"):
         if not path.is_file():
@@ -107,8 +107,9 @@ def _select_files(repo_dir: Path, limit: int = 240) -> list[Path]:
             continue
         priority = _priority(path, repo_dir)
         candidates.append((priority, path))
+
     candidates.sort(key=lambda item: (item[0], len(item[1].parts), item[1].as_posix().lower()))
-    return [path for _, path in candidates[:limit]]
+    return [path for _, path in candidates]
 
 
 def _priority(path: Path, repo_dir: Path) -> int:
@@ -151,6 +152,8 @@ def _read_snippet(path: Path, max_chars: int = 1200) -> str:
 
 
 def _file_type(path: Path) -> str:
+    if path.name.lower() in {"cmakelists.txt"} or path.suffix.lower() == ".cmake":
+        return "config"
     suffix = path.suffix.lower()
     if suffix in {".md", ".txt", ".rst"}:
         return "document"

@@ -12,6 +12,15 @@ let isCreatingTopic = false;
 let isUpdatingTopicSources = false;
 let topicPollTimer = null;
 let activeTopicMenuId = null;
+let activeGraphTopicId = null;
+let activeGraphView = { scale: 1, offsetX: 0, offsetY: 0 };
+let activeGraphScene = null;
+let activeGraphFrame = 0;
+let activeGraphCanvas = null;
+let graphWindowListenersBound = false;
+const graphDragState = { dragging: false, startX: 0, startY: 0 };
+const GRAPH_VIEWBOX = { width: 1320, height: 720 };
+const GRAPH_NODE_LIST_LIMIT = 120;
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -47,6 +56,16 @@ const els = {
   settingsFiles: document.querySelector("#topic-settings-files"),
   settingsSourceList: document.querySelector("#topic-settings-source-list"),
   settingsSubmit: document.querySelector("#topic-settings-submit"),
+  graphModal: document.querySelector("#topic-graph-modal"),
+  closeGraphModal: document.querySelector("#close-topic-graph"),
+  graphTitle: document.querySelector("#topic-graph-title"),
+  graphSubtitle: document.querySelector("#topic-graph-subtitle"),
+  graphStage: document.querySelector("#topic-graph-stage"),
+  graphNodeCount: document.querySelector("#topic-graph-node-count"),
+  graphEdgeCount: document.querySelector("#topic-graph-edge-count"),
+  graphKind: document.querySelector("#topic-graph-kind"),
+  graphClusterList: document.querySelector("#topic-graph-cluster-list"),
+  graphNodeList: document.querySelector("#topic-graph-node-list"),
   toast: document.querySelector("#toast"),
 };
 
@@ -182,7 +201,10 @@ function renderTopicTree() {
     folderButton.className = "topic-folder-button";
     folderButton.innerHTML = `
       <span class="topic-folder-arrow">${expandedTopics.has(topic.id) ? "▾" : "▸"}</span>
-      <span class="topic-title">${escapeHtml(topic.name)}</span>
+      <span class="topic-folder-text">
+        <span class="topic-title">${escapeHtml(topic.name)}</span>
+        <span class="topic-status">${escapeHtml(topicStatusText(topic))}</span>
+      </span>
     `;
     folderButton.addEventListener("click", () => {
       if (expandedTopics.has(topic.id)) {
@@ -217,6 +239,7 @@ function renderTopicTree() {
       menu.className = "topic-menu-popover";
       menu.innerHTML = `
         <button type="button" class="topic-menu-item" data-topic-action="new-chat" data-topic-id="${topic.id}">New chat</button>
+        <button type="button" class="topic-menu-item" data-topic-action="show-graph" data-topic-id="${topic.id}">Show graph</button>
         <button type="button" class="topic-menu-item" data-topic-action="settings" data-topic-id="${topic.id}">Settings</button>
         <button type="button" class="topic-menu-item topic-menu-item-danger" data-topic-action="delete" data-topic-id="${topic.id}">Delete</button>
       `;
@@ -235,7 +258,7 @@ function renderTopicTree() {
         const button = document.createElement("button");
         button.type = "button";
         button.className = `thread-button ${thread.id === activeThreadId ? "active" : ""}`;
-        button.innerHTML = `<span>${escapeHtml(thread.title)}</span><small>${escapeHtml(topicStatusText(topic))}</small>`;
+        button.innerHTML = `<span>${escapeHtml(thread.title)}</span>`;
         button.addEventListener("click", () => selectThread(topic.id, thread.id));
         body.append(button);
       }
@@ -258,6 +281,10 @@ function renderTopicTree() {
       }
       if (topicAction === "settings") {
         openTopicSettings(topicId);
+        return;
+      }
+      if (topicAction === "show-graph") {
+        openTopicGraph(topicId);
         return;
       }
       if (topicAction === "delete") {
@@ -407,6 +434,35 @@ async function copyMessage(messageId) {
   }
 }
 
+async function refreshMessage(messageId) {
+  if (!activeTopicId || activeThreadId === "agent" || isPending()) return;
+  const session = getSession();
+  const target = session.messages.find((item) => item.id === messageId && item.role === "agent");
+  if (!target) return;
+  target.refreshing = true;
+  renderMessages();
+  try {
+    const refreshed = await api(`/api/threads/${activeThreadId}/messages/${messageId}/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: target.text }),
+    });
+    const nextTarget = session.messages.find((item) => item.id === messageId);
+    if (nextTarget) {
+      nextTarget.text = refreshed.text;
+      nextTarget.createdAt = refreshed.created_at;
+      nextTarget.refreshing = false;
+    }
+  } catch (error) {
+    const nextTarget = session.messages.find((item) => item.id === messageId);
+    if (nextTarget) {
+      nextTarget.refreshing = false;
+    }
+    showToast(error.message);
+  }
+  renderMessages();
+}
+
 els.agentThread.addEventListener("click", selectAgentChat);
 els.openSidebar.addEventListener("click", () => setSidebarOpen(true));
 els.closeSidebar.addEventListener("click", () => setSidebarOpen(false));
@@ -421,6 +477,19 @@ els.manualTopic.addEventListener("click", () => {
 
 els.closeModal.addEventListener("click", () => els.modal.close());
 els.closeSettingsModal.addEventListener("click", () => els.settingsModal.close());
+els.closeGraphModal.addEventListener("click", () => {
+  activeGraphTopicId = null;
+  activeGraphScene = null;
+  activeGraphCanvas = null;
+  graphDragState.dragging = false;
+  els.graphModal.close();
+});
+els.graphModal.addEventListener("close", () => {
+  activeGraphTopicId = null;
+  activeGraphScene = null;
+  activeGraphCanvas = null;
+  graphDragState.dragging = false;
+});
 els.modalAddSource.addEventListener("click", addModalSourceFromInput);
 els.settingsAddSource.addEventListener("click", addSettingsSourceFromInput);
 
@@ -768,6 +837,156 @@ function openTopicSettings(topicId) {
     .catch((error) => showToast(error.message));
 }
 
+async function openTopicGraph(topicId) {
+  const topic = topics.find((item) => item.id === topicId);
+  if (!topic) return;
+  activeGraphTopicId = topicId;
+  els.graphTitle.textContent = `Topic graph: ${topic.name}`;
+  els.graphSubtitle.textContent = "Loading saved graph preview...";
+  els.graphNodeCount.textContent = "0";
+  els.graphEdgeCount.textContent = "0";
+  els.graphKind.textContent = "-";
+  els.graphNodeList.innerHTML = "";
+  els.graphStage.innerHTML = `<div class="graph-stage-empty">Loading graph preview...</div>`;
+  els.graphModal.showModal();
+  try {
+    const payload = await api(`/api/topics/${topicId}/graph`);
+    if (activeGraphTopicId !== topicId) {
+      return;
+    }
+    renderTopicGraph(payload);
+  } catch (error) {
+    if (activeGraphTopicId !== topicId) {
+      return;
+    }
+    els.graphSubtitle.textContent = topicStatusText(topic);
+    els.graphStage.innerHTML = `<div class="graph-stage-empty">${escapeHtml(formatUiMessage(error.message))}</div>`;
+    showToast(error.message);
+  }
+}
+
+function renderTopicGraph(payload) {
+  const graphModel = buildGraphModel(payload);
+  els.graphTitle.textContent = `Topic graph: ${payload.topic_name}`;
+  els.graphSubtitle.textContent = "Showing the full topic graph with clustered communities.";
+  els.graphNodeCount.textContent = String(payload.total_nodes);
+  els.graphEdgeCount.textContent = String(payload.total_edges);
+  els.graphKind.textContent = payload.graph_kind === "fallback" ? "Fallback graph" : "Graphify graph";
+  renderGraphStage(payload, graphModel);
+  renderGraphClusterList(payload, graphModel.groups);
+  renderGraphNodeList(graphModel.nodes);
+}
+
+function renderGraphNodeList(nodes) {
+  els.graphNodeList.innerHTML = "";
+  for (const node of nodes.slice(0, GRAPH_NODE_LIST_LIMIT)) {
+    const item = document.createElement("li");
+    item.className = "graph-node-item";
+    item.innerHTML = `
+      <div>
+        <strong>${escapeHtml(node.label)}</strong>
+        <span><i class="graph-node-swatch" style="background:${escapeHtml(node.color)}"></i>${escapeHtml(node.familyLabel)}</span>
+      </div>
+      <small>${node.degree} links</small>
+    `;
+    els.graphNodeList.append(item);
+  }
+}
+
+function renderGraphClusterList(payload, groups) {
+  els.graphClusterList.innerHTML = "";
+  for (const group of groups) {
+    const groupCount = payload.kind_counts?.[group.family] ?? group.nodes.length;
+    const item = document.createElement("li");
+    item.className = "graph-cluster-item";
+    item.innerHTML = `
+      <span class="graph-cluster-name">
+        <i class="graph-node-swatch graph-node-swatch-large" style="background:${escapeHtml(group.color)}"></i>
+        ${escapeHtml(group.label)}
+      </span>
+      <strong>${groupCount}</strong>
+    `;
+    els.graphClusterList.append(item);
+  }
+}
+
+function renderGraphStage(payload, graphModel) {
+  const { width, height } = GRAPH_VIEWBOX;
+  const positions = new Map();
+  const nodes = graphModel.nodes;
+  if (!nodes.length) {
+    activeGraphScene = null;
+    els.graphStage.innerHTML = `<div class="graph-stage-empty">This graph does not contain previewable nodes.</div>`;
+    return;
+  }
+
+  const groups = graphModel.groups;
+  assignGraphGroupCenters(groups, width, height);
+
+  groups.forEach((group) => {
+    placeClusterNodes(group, positions);
+  });
+
+  relaxGraphPositions(nodes, payload.edges || [], positions, graphModel.nodeMap, groups, width, height);
+  separateOverlappingGraphNodes(nodes, positions);
+  normalizeGraphPositions(groups, positions, width, height);
+  separateOverlappingGraphNodes(nodes, positions);
+  els.graphStage.innerHTML = `
+    <div class="graph-toolbar">
+      <button type="button" class="graph-tool-button" data-graph-zoom="out" aria-label="Zoom out">-</button>
+      <button type="button" class="graph-tool-button" data-graph-zoom="in" aria-label="Zoom in">+</button>
+      <button type="button" class="graph-tool-button" data-graph-zoom="reset" aria-label="Reset zoom">Reset</button>
+    </div>
+    <canvas class="graph-canvas" width="${width}" height="${height}" aria-label="Graph preview for ${escapeHtml(payload.topic_name)}"></canvas>
+    <div class="graph-tooltip" hidden></div>
+  `;
+  const labelNodes = nodes
+    .filter((node) => shouldShowGraphNodeLabel(node, graphModel.totalNodes))
+    .map((node) => ({
+      id: node.id,
+      text: shortGraphLabel(node.label),
+      color: node.strokeColor,
+      x: positions.get(node.id).x,
+      y: positions.get(node.id).y,
+      radius: node.radius,
+    }));
+  const drawEdges = (payload.edges || [])
+    .filter(
+      (edge) =>
+        positions.has(edge.source) &&
+        positions.has(edge.target) &&
+        graphModel.nodeMap.has(edge.source) &&
+        graphModel.nodeMap.has(edge.target),
+    )
+    .map((edge) => {
+      const sourceNode = graphModel.nodeMap.get(edge.source);
+      const targetNode = graphModel.nodeMap.get(edge.target);
+      const sameFamily = sourceNode.family === targetNode.family;
+      const touchesRepository = sourceNode.family === "repository" || targetNode.family === "repository";
+      return {
+        source: positions.get(edge.source),
+        target: positions.get(edge.target),
+        color: sameFamily ? "rgba(115, 126, 145, 0.26)" : "rgba(112, 124, 145, 0.18)",
+        width: touchesRepository ? 0.55 : sameFamily ? 1.05 : 0.8,
+        opacity: touchesRepository ? 0.38 : 0.7,
+      };
+    });
+  const sceneNodes = nodes.map((node) => ({ ...node, x: positions.get(node.id).x, y: positions.get(node.id).y }));
+  activeGraphScene = {
+    width,
+    height,
+    nodes: sceneNodes,
+    nodeById: new Map(sceneNodes.map((node) => [node.id, node])),
+    edges: drawEdges,
+    labels: labelNodes,
+    hoverNodeId: null,
+  };
+  resetGraphViewport(width, height);
+  scheduleGraphRedraw();
+  wireGraphZoom();
+  wireGraphTooltip();
+}
+
 async function deleteTopic(topicId) {
   const topic = topics.find((item) => item.id === topicId);
   if (!topic) return;
@@ -849,14 +1068,35 @@ function renderMessages() {
         .map(
           (message) => `
             <article class="message-row ${message.role}">
-              <div class="message ${message.role}">
-                <div class="message-body">${escapeHtml(message.text)}</div>
+              <div class="message-shell ${message.role}">
+                <div class="message ${message.role}">
+                  <div class="message-body">${escapeHtml(String(message.text || "").trimEnd())}</div>
+                </div>
                 ${
                   message.role === "agent"
                     ? `
                       <div class="message-actions">
-                        <button class="message-action" type="button" data-copy-id="${message.id}">
-                          ${session.copiedId === message.id ? "Copied" : "Copy"}
+                        <button class="message-action-icon" type="button" data-copy-id="${message.id}" aria-label="${session.copiedId === message.id ? "Copied" : "Copy"}">
+                          ${
+                            session.copiedId === message.id
+                              ? `
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                  <path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                              `
+                              : `
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                  <rect x="9" y="9" width="10" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+                                  <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                              `
+                          }
+                        </button>
+                        <button class="message-action-icon" type="button" data-refresh-id="${message.id}" aria-label="Refresh">
+                          <svg viewBox="0 0 24 24" aria-hidden="true" class="${message.refreshing ? "is-spinning" : ""}">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                            <path d="M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                          </svg>
                         </button>
                       </div>
                     `
@@ -885,6 +1125,9 @@ function renderMessages() {
 
   els.messages.querySelectorAll("[data-copy-id]").forEach((button) => {
     button.addEventListener("click", () => copyMessage(button.dataset.copyId));
+  });
+  els.messages.querySelectorAll("[data-refresh-id]").forEach((button) => {
+    button.addEventListener("click", () => refreshMessage(button.dataset.refreshId));
   });
   if (!session.scrollLocked || session.pending) {
     scrollMessagesToBottom(false);
@@ -1003,6 +1246,679 @@ function formatUiMessage(message) {
     return `${text.slice(0, 177)}...`;
   }
   return text;
+}
+
+function shortGraphLabel(value) {
+  const text = String(value || "").trim();
+  if (text.length <= 22) {
+    return text;
+  }
+  return `${text.slice(0, 19)}...`;
+}
+
+function shouldShowGraphNodeLabel(node, totalNodes = 0) {
+  if (node.family === "repository") {
+    return true;
+  }
+  if (totalNodes > 3200) {
+    return node.degree >= 24 && node.rankInGroup < 2;
+  }
+  if (totalNodes > 1600) {
+    return node.degree >= 12 && node.rankInGroup < 2;
+  }
+  if (totalNodes > 700) {
+    return node.degree >= 8 && node.rankInGroup < 2;
+  }
+  if (node.degree >= 8) {
+    return true;
+  }
+  return node.rankInGroup < 3 && node.degree >= 2;
+}
+
+function buildGraphModel(payload) {
+  const totalNodes = Math.max((payload.nodes || []).length, 1);
+  const layoutScale = Math.max(0.72, Math.min(1.08, 15 / Math.sqrt(totalNodes)));
+  const nodes = (payload.nodes || []).map((node) => {
+    const family = graphFamily(node.kind || node.label || "");
+    const color = graphFamilyColor(family);
+    const degree = Number(node.degree || 0);
+    return {
+      ...node,
+      degree,
+      family,
+      familyLabel: graphFamilyLabel(family),
+      color,
+      strokeColor: "#11141b",
+      strokeWidth: degree >= 10 ? 1.6 : 1.05,
+      radius: Math.max(
+        family === "document" || family === "config" ? 4.2 : 5.2,
+        Math.min(
+          family === "repository" ? 17 : family === "document" || family === "config" ? 10.8 : 13.2,
+          (family === "repository" ? 10.8 + Math.sqrt(degree + 1) * 1.85 : 5.2 + Math.sqrt(degree + 1) * 1.55) *
+            layoutScale,
+        ),
+      ),
+    };
+  });
+
+  const groupsByFamily = new Map();
+  for (const node of nodes) {
+    if (!groupsByFamily.has(node.family)) {
+      groupsByFamily.set(node.family, {
+        family: node.family,
+        label: node.familyLabel,
+        color: node.color,
+        nodes: [],
+      });
+    }
+    groupsByFamily.get(node.family).nodes.push(node);
+  }
+
+  const groups = [...groupsByFamily.values()]
+    .map((group) => {
+      group.nodes.sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
+      group.nodes.forEach((node, index) => {
+        node.rankInGroup = index;
+      });
+      group.spreadScale = Math.max(
+        1,
+        Math.min(
+          group.family === "document" || group.family === "config" ? 7.4 : 5.6,
+          1 + Math.sqrt(group.nodes.length) / (group.family === "document" || group.family === "config" ? 3.35 : 4.8),
+        ),
+      );
+      return group;
+    })
+    .sort((a, b) => b.nodes.length - a.nodes.length || b.nodes[0].degree - a.nodes[0].degree);
+
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  nodes.sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
+  nodes.forEach((node, index) => {
+    node.layoutIndex = index;
+  });
+  return { nodes, groups, nodeMap, totalNodes, layoutScale };
+}
+
+function assignGraphGroupCenters(groups, width, height) {
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const repositoryGroup = groups.find((group) => group.family === "repository");
+  const others = groups.filter((group) => group.family !== "repository");
+
+  if (repositoryGroup) {
+    repositoryGroup.cx = centerX - 30;
+    repositoryGroup.cy = centerY + 10;
+  }
+
+  if (!others.length) {
+    return;
+  }
+
+  const totalWeight = others.reduce((sum, group) => sum + Math.max(group.nodes.length, 1), 0);
+  const orbitX = Math.max(230, Math.min(width * 0.3, 310 + others.length * 24));
+  const orbitY = Math.max(150, Math.min(height * 0.27, 190 + others.length * 18));
+  let cursor = -Math.PI / 2;
+
+  others.forEach((group) => {
+    const slice = (Math.max(group.nodes.length, 1) / totalWeight) * Math.PI * 2;
+    const angle = cursor + slice / 2 + (hashStringUnit(group.family) - 0.5) * 0.22;
+    const familyBiasY = group.family === "document" ? -34 : group.family === "repository" ? 16 : 0;
+    group.cx = centerX + Math.cos(angle) * orbitX;
+    group.cy = centerY + Math.sin(angle) * orbitY + familyBiasY;
+    cursor += slice;
+  });
+}
+
+function normalizeGraphPositions(groups, positions, width, height) {
+  const paddingX = 96;
+  const paddingY = 72;
+  const points = [...positions.values()];
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const spanX = Math.max(maxX - minX, 1);
+  const spanY = Math.max(maxY - minY, 1);
+  const usableWidth = width - paddingX * 2;
+  const usableHeight = height - paddingY * 2;
+  const scale = Math.min(usableWidth / spanX, usableHeight / spanY, 1);
+  const offsetX = (width - spanX * scale) / 2 - minX * scale;
+  const offsetY = (height - spanY * scale) / 2 - minY * scale;
+
+  positions.forEach((point, key) => {
+    positions.set(key, {
+      x: point.x * scale + offsetX,
+      y: point.y * scale + offsetY,
+    });
+  });
+
+  groups.forEach((group) => {
+    group.cx = group.cx * scale + offsetX;
+    group.cy = group.cy * scale + offsetY;
+  });
+}
+
+function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, height) {
+  const groupMap = new Map(groups.map((group) => [group.family, group]));
+  const nodeList = nodes.filter((node) => positions.has(node.id));
+  const iterations =
+    nodeList.length > 4500 ? 10 : nodeList.length > 2500 ? 14 : nodeList.length > 1200 ? 22 : nodeList.length > 600 ? 38 : 62;
+  const baseCellSize = nodeList.length > 2500 ? 84 : 72;
+
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const displacements = new Map(nodeList.map((node) => [node.id, { x: 0, y: 0 }]));
+    const buckets = new Map();
+    const cellSize = baseCellSize + iteration * 2;
+
+    for (const node of nodeList) {
+      const point = positions.get(node.id);
+      const cellX = Math.floor(point.x / cellSize);
+      const cellY = Math.floor(point.y / cellSize);
+      const key = `${cellX}:${cellY}`;
+      if (!buckets.has(key)) {
+        buckets.set(key, []);
+      }
+      buckets.get(key).push(node);
+    }
+
+    for (const node of nodeList) {
+      const posA = positions.get(node.id);
+      const cellX = Math.floor(posA.x / cellSize);
+      const cellY = Math.floor(posA.y / cellSize);
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+          const nearby = buckets.get(`${cellX + offsetX}:${cellY + offsetY}`) || [];
+          for (const other of nearby) {
+            if (other.layoutIndex <= node.layoutIndex) {
+              continue;
+            }
+            const posB = positions.get(other.id);
+            const dx = posA.x - posB.x;
+            const dy = posA.y - posB.y;
+            const distanceSq = dx * dx + dy * dy + 0.01;
+            const distance = Math.sqrt(distanceSq);
+            const sameFamily = node.family === other.family;
+            const repulsionBase = sameFamily
+              ? node.family === "document" || node.family === "config"
+                ? 13200
+                : 6800
+              : 3600;
+            const repulsion = Math.min(repulsionBase / distanceSq, sameFamily ? 18 : 10);
+            const forceX = (dx / distance) * repulsion;
+            const forceY = (dy / distance) * repulsion;
+            displacements.get(node.id).x += forceX;
+            displacements.get(node.id).y += forceY;
+            displacements.get(other.id).x -= forceX;
+            displacements.get(other.id).y -= forceY;
+          }
+        }
+      }
+    }
+
+    for (const edge of edges) {
+      const sourceNode = nodeMap.get(edge.source);
+      const targetNode = nodeMap.get(edge.target);
+      if (!sourceNode || !targetNode || !positions.has(sourceNode.id) || !positions.has(targetNode.id)) {
+        continue;
+      }
+      const source = positions.get(sourceNode.id);
+      const target = positions.get(targetNode.id);
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+      const sameFamily = sourceNode.family === targetNode.family;
+      const touchesRepository = sourceNode.family === "repository" || targetNode.family === "repository";
+      const preferred = touchesRepository ? 245 : sameFamily ? (sourceNode.family === "document" || sourceNode.family === "config" ? 126 : 88) : 168;
+      const pull = (distance - preferred) * (touchesRepository ? 0.0015 : sameFamily ? 0.0052 : 0.0024);
+      const forceX = (dx / distance) * pull;
+      const forceY = (dy / distance) * pull;
+      displacements.get(sourceNode.id).x += forceX;
+      displacements.get(sourceNode.id).y += forceY;
+      displacements.get(targetNode.id).x -= forceX;
+      displacements.get(targetNode.id).y -= forceY;
+    }
+
+    for (const node of nodeList) {
+      const group = groupMap.get(node.family);
+      if (!group) continue;
+      const displacement = displacements.get(node.id);
+      const point = positions.get(node.id);
+      const gravity =
+        node.family === "repository"
+          ? 0.038
+          : node.family === "document" || node.family === "config"
+            ? 0.0045
+            : 0.012;
+      displacement.x += (group.cx - point.x) * gravity;
+      displacement.y += (group.cy - point.y) * gravity;
+    }
+
+    const temperature = 12 * (1 - iteration / iterations);
+    for (const node of nodeList) {
+      const point = positions.get(node.id);
+      const displacement = displacements.get(node.id);
+      point.x += Math.max(-temperature, Math.min(temperature, displacement.x));
+      point.y += Math.max(-temperature, Math.min(temperature, displacement.y));
+      positions.set(node.id, point);
+    }
+  }
+}
+
+function separateOverlappingGraphNodes(nodes, positions) {
+  const nodeList = nodes.filter((node) => positions.has(node.id));
+  const passes = nodeList.length > 3000 ? 5 : nodeList.length > 1200 ? 8 : 12;
+  for (let pass = 0; pass < passes; pass += 1) {
+    let moved = false;
+    const buckets = new Map();
+    const cellSize = 46;
+    for (const node of nodeList) {
+      const point = positions.get(node.id);
+      const cellX = Math.floor(point.x / cellSize);
+      const cellY = Math.floor(point.y / cellSize);
+      const key = `${cellX}:${cellY}`;
+      if (!buckets.has(key)) {
+        buckets.set(key, []);
+      }
+      buckets.get(key).push(node);
+    }
+    for (const node of nodeList) {
+      const posA = positions.get(node.id);
+      const cellX = Math.floor(posA.x / cellSize);
+      const cellY = Math.floor(posA.y / cellSize);
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+          const nearby = buckets.get(`${cellX + offsetX}:${cellY + offsetY}`) || [];
+          for (const other of nearby) {
+            if (other.layoutIndex <= node.layoutIndex) {
+              continue;
+            }
+            const posB = positions.get(other.id);
+            const dx = posB.x - posA.x;
+            const dy = posB.y - posA.y;
+            const distance = Math.sqrt(dx * dx + dy * dy) || 0.001;
+            const sameFamily = node.family === other.family;
+            const minGap =
+              node.radius +
+              other.radius +
+              (sameFamily ? (node.family === "document" || node.family === "config" ? 16 : 14) : 20);
+            if (distance >= minGap) {
+              continue;
+            }
+            const push = (minGap - distance) / 2;
+            const pushX = (dx / distance) * push;
+            const pushY = (dy / distance) * push;
+            posA.x -= pushX;
+            posA.y -= pushY;
+            posB.x += pushX;
+            posB.y += pushY;
+            moved = true;
+          }
+        }
+      }
+    }
+    if (!moved) {
+      break;
+    }
+  }
+}
+
+function computeGraphGroupBounds(groups, positions) {
+  const boundsByFamily = new Map();
+  for (const group of groups) {
+    const points = group.nodes
+      .filter((node) => positions.has(node.id))
+      .map((node) => {
+        const point = positions.get(node.id);
+        return {
+          x: point.x,
+          y: point.y,
+          radius: node.radius,
+        };
+      });
+    if (!points.length) {
+      continue;
+    }
+    const padX = group.family === "repository" ? 26 : 34;
+    const padY = group.family === "repository" ? 22 : 30;
+    const minX = Math.min(...points.map((point) => point.x - point.radius)) - padX;
+    const maxX = Math.max(...points.map((point) => point.x + point.radius)) + padX;
+    const minY = Math.min(...points.map((point) => point.y - point.radius)) - padY;
+    const maxY = Math.max(...points.map((point) => point.y + point.radius)) + padY;
+    boundsByFamily.set(group.family, {
+      cx: (minX + maxX) / 2,
+      cy: (minY + maxY) / 2,
+      rx: Math.max((maxX - minX) / 2, group.family === "repository" ? 42 : 58),
+      ry: Math.max((maxY - minY) / 2, group.family === "repository" ? 32 : 46),
+    });
+  }
+  return boundsByFamily;
+}
+
+function wireGraphTooltip() {
+  const canvas = els.graphStage.querySelector(".graph-canvas");
+  const tooltip = els.graphStage.querySelector(".graph-tooltip");
+  if (!tooltip || !canvas) {
+    return;
+  }
+  canvas.addEventListener("mousemove", (event) => {
+    if (!activeGraphScene) {
+      return;
+    }
+    const stageRect = els.graphStage.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const x = ((event.clientX - canvasRect.left) / canvasRect.width) * activeGraphScene.width;
+    const y = ((event.clientY - canvasRect.top) / canvasRect.height) * activeGraphScene.height;
+    const hitNode = findGraphHoverNode(x, y);
+
+    if (hitNode?.id !== activeGraphScene.hoverNodeId) {
+      activeGraphScene.hoverNodeId = hitNode?.id || null;
+      scheduleGraphRedraw();
+    }
+
+    if (!hitNode) {
+      tooltip.hidden = true;
+      return;
+    }
+
+    tooltip.innerHTML = `
+      <strong>${escapeHtml(hitNode.label)}</strong>
+      <span>${escapeHtml(hitNode.familyLabel || "Node")} • ${hitNode.degree || 0} links</span>
+    `;
+    tooltip.hidden = false;
+    const tooltipWidth = Math.min(stageRect.width - 20, Math.max(180, tooltip.offsetWidth || 220));
+    const offsetX = event.clientX - stageRect.left + 14;
+    const offsetY = event.clientY - stageRect.top - 14;
+    tooltip.style.left = `${Math.max(10, Math.min(offsetX, stageRect.width - tooltipWidth - 10))}px`;
+    tooltip.style.top = `${Math.max(offsetY, 14)}px`;
+  });
+
+  canvas.addEventListener("mouseleave", () => {
+    tooltip.hidden = true;
+    if (activeGraphScene?.hoverNodeId) {
+      activeGraphScene.hoverNodeId = null;
+      scheduleGraphRedraw();
+    }
+  });
+}
+
+function resetGraphViewport(width = GRAPH_VIEWBOX.width, height = GRAPH_VIEWBOX.height) {
+  activeGraphView = {
+    scale: 1,
+    offsetX: width * 0.02,
+    offsetY: height * 0.02,
+  };
+}
+
+function updateGraphViewport() {
+  scheduleGraphRedraw();
+}
+
+function adjustGraphZoom(factor, centerX, centerY) {
+  const nextScale = Math.max(0.55, Math.min(2.8, activeGraphView.scale * factor));
+  const appliedFactor = nextScale / activeGraphView.scale;
+  activeGraphView.offsetX = centerX - (centerX - activeGraphView.offsetX) * appliedFactor;
+  activeGraphView.offsetY = centerY - (centerY - activeGraphView.offsetY) * appliedFactor;
+  activeGraphView.scale = nextScale;
+  updateGraphViewport();
+}
+
+const GRAPH_BUTTON_ZOOM_FACTOR = 1.1;
+const GRAPH_WHEEL_ZOOM_FACTOR = 1.045;
+
+function wireGraphZoom() {
+  const canvas = els.graphStage.querySelector(".graph-canvas");
+  const controls = els.graphStage.querySelectorAll("[data-graph-zoom]");
+  if (!canvas) {
+    return;
+  }
+  activeGraphCanvas = canvas;
+
+  controls.forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.graphZoom;
+      if (action === "reset") {
+        resetGraphViewport();
+        updateGraphViewport();
+        return;
+      }
+      adjustGraphZoom(
+        action === "in" ? GRAPH_BUTTON_ZOOM_FACTOR : 1 / GRAPH_BUTTON_ZOOM_FACTOR,
+        GRAPH_VIEWBOX.width / 2,
+        GRAPH_VIEWBOX.height / 2,
+      );
+    });
+  });
+
+  canvas.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * GRAPH_VIEWBOX.width;
+      const y = ((event.clientY - rect.top) / rect.height) * GRAPH_VIEWBOX.height;
+      adjustGraphZoom(event.deltaY < 0 ? GRAPH_WHEEL_ZOOM_FACTOR : 1 / GRAPH_WHEEL_ZOOM_FACTOR, x, y);
+    },
+    { passive: false },
+  );
+
+  canvas.addEventListener("mousedown", (event) => {
+    graphDragState.dragging = true;
+    graphDragState.startX = event.clientX;
+    graphDragState.startY = event.clientY;
+    canvas.classList.add("is-dragging");
+  });
+
+  if (graphWindowListenersBound) {
+    return;
+  }
+  graphWindowListenersBound = true;
+  window.addEventListener("mousemove", (event) => {
+    if (!graphDragState.dragging || !activeGraphCanvas) {
+      return;
+    }
+    activeGraphView.offsetX +=
+      ((event.clientX - graphDragState.startX) / activeGraphCanvas.clientWidth) * GRAPH_VIEWBOX.width;
+    activeGraphView.offsetY +=
+      ((event.clientY - graphDragState.startY) / activeGraphCanvas.clientHeight) * GRAPH_VIEWBOX.height;
+    graphDragState.startX = event.clientX;
+    graphDragState.startY = event.clientY;
+    updateGraphViewport();
+  });
+
+  window.addEventListener("mouseup", () => {
+    graphDragState.dragging = false;
+    activeGraphCanvas?.classList.remove("is-dragging");
+  });
+}
+
+function scheduleGraphRedraw() {
+  if (activeGraphFrame) {
+    return;
+  }
+  activeGraphFrame = window.requestAnimationFrame(() => {
+    activeGraphFrame = 0;
+    drawGraphScene();
+  });
+}
+
+function drawGraphScene() {
+  if (!activeGraphScene) {
+    return;
+  }
+  const canvas = els.graphStage.querySelector(".graph-canvas");
+  if (!canvas) {
+    return;
+  }
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return;
+  }
+
+  const { width, height } = activeGraphScene;
+  context.clearRect(0, 0, width, height);
+
+  const scale = activeGraphView.scale;
+  const radiusScale = graphNodeZoomScale(scale);
+  const fontScale = Math.max(0.58, Math.min(1, 0.78 + (radiusScale - 0.55) * 0.9));
+
+  context.save();
+  context.lineCap = "round";
+  for (const edge of activeGraphScene.edges) {
+    context.beginPath();
+    context.moveTo(edge.source.x * scale + activeGraphView.offsetX, edge.source.y * scale + activeGraphView.offsetY);
+    context.lineTo(edge.target.x * scale + activeGraphView.offsetX, edge.target.y * scale + activeGraphView.offsetY);
+    context.strokeStyle = edge.color;
+    context.globalAlpha = edge.opacity;
+    context.lineWidth = Math.max(0.4, edge.width * Math.max(0.5, Math.min(scale, 1.1)));
+    context.stroke();
+  }
+  context.restore();
+
+  for (const node of activeGraphScene.nodes) {
+    const screenX = node.x * scale + activeGraphView.offsetX;
+    const screenY = node.y * scale + activeGraphView.offsetY;
+    const radius = node.radius * radiusScale;
+    const hovered = node.id === activeGraphScene.hoverNodeId;
+    context.beginPath();
+    context.arc(screenX, screenY, hovered ? radius + 1 : radius, 0, Math.PI * 2);
+    context.fillStyle = node.color;
+    context.fill();
+    context.strokeStyle = hovered ? "#0f172a" : node.strokeColor;
+    context.lineWidth = hovered ? Math.max(1.4, node.strokeWidth + 0.4) : node.strokeWidth;
+    context.stroke();
+  }
+
+  context.textAlign = "center";
+  context.lineJoin = "round";
+  for (const label of activeGraphScene.labels) {
+    const node = activeGraphScene.nodeById.get(label.id);
+    if (!node) {
+      continue;
+    }
+    const x = label.x * scale + activeGraphView.offsetX;
+    const y = label.y * scale + activeGraphView.offsetY + (node.radius * radiusScale + 11);
+    context.font = `${Math.max(8, Math.round(10 * fontScale))}px Inter, system-ui, sans-serif`;
+    context.lineWidth = 4;
+    context.strokeStyle = "rgba(255, 255, 255, 0.92)";
+    context.strokeText(label.text, x, y);
+    context.fillStyle = label.color;
+    context.fillText(label.text, x, y);
+  }
+}
+
+function findGraphHoverNode(screenX, screenY) {
+  if (!activeGraphScene) {
+    return null;
+  }
+  const radiusScale = graphNodeZoomScale(activeGraphView.scale);
+  let bestNode = null;
+  let bestDistanceRatio = Number.POSITIVE_INFINITY;
+  for (let index = activeGraphScene.nodes.length - 1; index >= 0; index -= 1) {
+    const node = activeGraphScene.nodes[index];
+    const x = node.x * activeGraphView.scale + activeGraphView.offsetX;
+    const y = node.y * activeGraphView.scale + activeGraphView.offsetY;
+    const radius = node.radius * radiusScale + 2;
+    const dx = screenX - x;
+    const dy = screenY - y;
+    const distanceSq = dx * dx + dy * dy;
+    if (distanceSq > radius * radius) {
+      continue;
+    }
+    const distanceRatio = distanceSq / (radius * radius);
+    if (distanceRatio < bestDistanceRatio) {
+      bestDistanceRatio = distanceRatio;
+      bestNode = node;
+    }
+  }
+  return bestNode;
+}
+
+function graphNodeZoomScale(scale) {
+  return Math.max(0.55, Math.min(1.06, 1 / Math.pow(scale, 0.23)));
+}
+
+function placeClusterNodes(group, positions) {
+  if (!group.nodes.length) {
+    return;
+  }
+  const firstNode = group.nodes[0];
+  const firstJitter = hashStringUnit(firstNode.id);
+  positions.set(firstNode.id, {
+    x: group.cx + (firstJitter - 0.5) * 42,
+    y: group.cy + (hashStringUnit(`${firstNode.id}:y`) - 0.5) * 42,
+  });
+  for (let index = 1; index < group.nodes.length; index += 1) {
+    const node = group.nodes[index];
+    const isRepository = group.family === "repository";
+    let angle;
+    let radiusX;
+    let radiusY;
+    if (isRepository) {
+      const jitter = hashStringUnit(node.id);
+      angle = index * 2.17 + jitter * 1.8;
+      radiusX = 42 + index * 28;
+      radiusY = 36 + index * 22;
+    } else {
+      const rank = index;
+      const jitter = hashStringUnit(node.id);
+      angle = rank * 2.099963229728653 + jitter * Math.PI;
+      const familyBase = group.family === "document" || group.family === "config" ? 24 : group.family === "code" ? 22 : 19;
+      const shell = Math.sqrt(rank) * familyBase * group.spreadScale;
+      const lobe = 0.72 + hashStringUnit(`${node.id}:lobe`) * 0.72;
+      radiusX = shell * lobe * (group.family === "document" || group.family === "config" ? 1.18 : 1.0);
+      radiusY = shell * (0.64 + hashStringUnit(`${node.id}:y`) * 0.54);
+    }
+    positions.set(node.id, {
+      x: group.cx + Math.cos(angle) * radiusX,
+      y: group.cy + Math.sin(angle) * radiusY,
+    });
+  }
+}
+
+function hashStringUnit(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return (hash % 1000) / 1000;
+}
+
+function graphFamily(value) {
+  const text = String(value || "").toLowerCase();
+  if (text.includes("repository") || text.includes("repo")) return "repository";
+  if (text.includes("config") || text.includes("cmake") || text.includes("yaml") || text.includes("yml") || text.includes("toml") || text.includes("json")) return "config";
+  if (text.includes("document") || text.includes("readme") || text.includes("markdown") || text.includes("md")) return "document";
+  if (text.includes("class") || text.includes("entity") || text.includes("struct")) return "entity";
+  if (text.includes("function") || text.includes("method") || text.includes("call")) return "logic";
+  if (text.includes("code") || text.includes("file") || text.includes("source")) return "code";
+  return "other";
+}
+
+function graphFamilyLabel(family) {
+  const labels = {
+    repository: "Repository",
+    config: "Config",
+    document: "Documents",
+    entity: "Entities",
+    logic: "Logic",
+    code: "Code",
+    other: "Other",
+  };
+  return labels[family] || "Other";
+}
+
+function graphFamilyColor(family) {
+  const colors = {
+    repository: "#8d98a6",
+    config: "#8f9aa6",
+    document: "#f28c38",
+    entity: "#a855f7",
+    logic: "#f28c38",
+    code: "#5fa6c9",
+    other: "#5fa6c9",
+  };
+  return colors[family] || "#5fa6c9";
 }
 
 function escapeHtml(value) {

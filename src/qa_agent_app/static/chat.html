@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QA Agent</title>
-    <link rel="stylesheet" href="/static/chat.css?v=20260610-session1" />
+    <link rel="stylesheet" href="/static/chat.css?v=20260611-graphmodal18" />
   </head>
   <body>
     <main class="chat-shell">
@@ -90,7 +90,48 @@
       </form>
     </dialog>
 
+    <dialog id="topic-graph-modal" class="topic-modal graph-modal">
+      <div class="graph-modal-layout">
+        <div class="modal-head">
+          <div class="graph-modal-heading">
+            <h2 id="topic-graph-title">Topic graph</h2>
+            <p id="topic-graph-subtitle">Graph preview</p>
+          </div>
+          <button id="close-topic-graph" type="button" aria-label="Close">Close</button>
+        </div>
+        <div class="graph-modal-content">
+          <section class="graph-preview-card">
+            <div id="topic-graph-stage" class="graph-stage"></div>
+          </section>
+          <aside class="graph-sidebar">
+            <div class="graph-stats">
+              <div class="graph-stat">
+                <span class="graph-stat-label">Nodes</span>
+                <strong id="topic-graph-node-count">0</strong>
+              </div>
+              <div class="graph-stat">
+                <span class="graph-stat-label">Edges</span>
+                <strong id="topic-graph-edge-count">0</strong>
+              </div>
+              <div class="graph-stat">
+                <span class="graph-stat-label">Source</span>
+                <strong id="topic-graph-kind">-</strong>
+              </div>
+            </div>
+            <div class="graph-section">
+              <h3>Communities</h3>
+              <ul id="topic-graph-cluster-list" class="graph-cluster-list"></ul>
+            </div>
+            <div class="graph-section">
+              <h3>Top nodes</h3>
+              <ul id="topic-graph-node-list" class="graph-node-list"></ul>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/chat.js?v=20260610-session1"></script>
+    <script src="/static/chat.js?v=20260611-graphmodal19"></script>
   </body>
 </html>

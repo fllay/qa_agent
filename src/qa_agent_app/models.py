@@ -63,6 +63,32 @@ class TopicSource(BaseModel):
     value: str
 
 
+class TopicGraphNode(BaseModel):
+    id: str
+    label: str
+    kind: str = ""
+    degree: int = 0
+
+
+class TopicGraphEdge(BaseModel):
+    source: str
+    target: str
+    label: str = ""
+
+
+class TopicGraphResponse(BaseModel):
+    topic_id: str
+    topic_name: str
+    graph_path: str
+    graph_kind: Literal["graphify", "fallback"]
+    total_nodes: int
+    total_edges: int
+    kind_counts: dict[str, int] = Field(default_factory=dict)
+    sampled: bool = False
+    nodes: list[TopicGraphNode]
+    edges: list[TopicGraphEdge]
+
+
 class IngestResult(BaseModel):
     topic: Topic
     message: str

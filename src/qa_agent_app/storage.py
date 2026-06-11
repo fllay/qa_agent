@@ -217,6 +217,20 @@ class TopicStore:
             raise KeyError(message_id)
         return _row_to_message(row)
 
+    def update_message_text(self, message_id: str, text: str) -> ChatMessage:
+        message = self.get_message(message_id)
+        now = _now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE chat_messages SET text = ? WHERE id = ?",
+                (text.strip(), message_id),
+            )
+            conn.execute(
+                "UPDATE chat_threads SET updated_at = ? WHERE id = ?",
+                (now, message.thread_id),
+            )
+        return self.get_message(message_id)
+
     def rename_thread(self, thread_id: str, title: str) -> ChatThread:
         thread = self.get_thread(thread_id)
         now = _now()
