@@ -123,3 +123,41 @@ def test_graph_search_prioritizes_repo_context_for_broad_project_questions(tmp_p
 
     assert [item["id"] for item in results[:2]] == ["repo::acmenet", "file::acmenet::README.md"]
     assert "file::acmenet::CMakeLists.txt" not in [item["id"] for item in results]
+
+
+def test_graph_search_prioritizes_github_issues_for_issue_questions(tmp_path):
+    graph_path = tmp_path / "fallback-graph.json"
+    payload = {
+        "nodes": [
+            {
+                "id": "repo::acmenet",
+                "label": "acmenet",
+                "type": "repository",
+                "path": str(tmp_path / "source" / "acmenet"),
+                "summary": "AcmeNet is a network control project.",
+            },
+            {
+                "id": "file::acmenet::_github/issues.md",
+                "label": "_github/issues.md",
+                "type": "document",
+                "path": str(tmp_path / "source" / "acmenet" / "_github" / "issues.md"),
+                "summary": "Issue #42: Packet scheduler stalls",
+            },
+            {
+                "id": "file::acmenet::README.md",
+                "label": "README.md",
+                "type": "document",
+                "path": str(tmp_path / "source" / "acmenet" / "README.md"),
+                "summary": "This project README mentions issue templates.",
+            },
+        ],
+        "edges": [
+            {"source": "repo::acmenet", "target": "file::acmenet::_github/issues.md", "relation": "contains"},
+            {"source": "repo::acmenet", "target": "file::acmenet::README.md", "relation": "contains"},
+        ],
+    }
+    graph_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    results = GraphIndex(graph_path).search("can i have latest issue on the project", limit=3)
+
+    assert results[0]["id"] == "file::acmenet::_github/issues.md"

@@ -10,6 +10,7 @@ SourceKind = Literal["github", "local_path", "upload"]
 
 class Topic(BaseModel):
     id: str
+    user_id: str
     name: str
     description: str = ""
     status: TopicStatus = "new"
@@ -29,6 +30,7 @@ class TopicCreate(BaseModel):
 
 class ChatThread(BaseModel):
     id: str
+    user_id: str
     topic_id: str
     title: str
     created_at: datetime

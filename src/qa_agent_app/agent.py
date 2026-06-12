@@ -196,7 +196,8 @@ class QaAgent:
                         "Answer using only the supplied graph context. Synthesize the evidence instead of copying raw "
                         "snippets verbatim. Match the user's requested level of technical detail. Prefer repository and "
                         "README context for broad project questions, and use code/config snippets only when they add "
-                        "specific technical evidence. If the context is insufficient, say so."
+                        "specific technical evidence. For issue or bug questions, prefer indexed GitHub issue context "
+                        "over repository overview context. If the context is insufficient, say so."
                     ),
                 },
                 {"role": "user", "content": f"Question: {question}\n\nGraph context:\n{context}"},
@@ -341,9 +342,18 @@ class QaAgent:
         archive_notice = next((summary for summary in repo_summaries if summary.get("archived_redirect")), None)
         repo_descriptions = [summary for summary in repo_summaries if summary is not archive_notice]
         file_signals = [signal for signal in (QaAgent._extract_file_signal(item) for item in context_items) if signal]
-        broad_repo_question = QaAgent._is_broad_repo_question(question)
+        issue_question = QaAgent._is_issue_question(question)
+        broad_repo_question = QaAgent._is_broad_repo_question(question) and not issue_question
+        issue_signals = [signal for signal in (QaAgent._extract_issue_signal(item) for item in context_items) if signal]
 
         lines: list[str] = []
+        if issue_question and issue_signals:
+            lines.append(issue_signals[0])
+            if archive_notice:
+                lines.append(QaAgent._format_archive_notice(archive_notice))
+            lines.append("Local LLM endpoint was not used, so this answer was assembled from indexed GitHub issue context.")
+            return "\n\n".join(lines)
+
         overview = ""
         purpose = ""
         if repo_descriptions:
@@ -402,6 +412,10 @@ class QaAgent:
     @staticmethod
     def _is_broad_repo_question(question: str) -> bool:
         return bool(re.search(r"\b(describe|summary|summarize|overview|project|repository|repo)\b", question, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _is_issue_question(question: str) -> bool:
+        return bool(re.search(r"\b(issue|issues|bug|bugs|ticket|tickets)\b", question, flags=re.IGNORECASE))
 
     @staticmethod
     def _extract_repo_summary(item: str) -> dict[str, object] | None:
@@ -465,6 +479,44 @@ class QaAgent:
         if snippet:
             return f"`{path}`: {snippet}"
         return f"`{path}`"
+
+    @staticmethod
+    def _extract_issue_signal(item: str) -> str | None:
+        if "_github/issues.md" not in item.lower():
+            return None
+        snippet_match = re.search(r"Content snippet:\s+(.*?)(?:\s+\|\s+related:|$)", item)
+        text = snippet_match.group(1).strip() if snippet_match else item
+        text = re.sub(r"\s+", " ", text).strip()
+        issue_match = re.search(r"Issue #(?P<number>\d+):\s*(?P<title>.*?)(?=\s+- State:|$)", text)
+        if not issue_match:
+            return None
+        number = issue_match.group("number")
+        title = issue_match.group("title").strip(" -")
+
+        def field(name: str) -> str:
+            match = re.search(rf"- {name}:\s*(.*?)(?=\s+- [A-Z][A-Za-z ]+:|\s+### |\s+## |$)", text)
+            return match.group(1).strip() if match else ""
+
+        state = field("State")
+        updated = field("Updated")
+        url = field("URL")
+        body_match = re.search(r"### Body\s+(.*?)(?=\s+## |\s+### Comments|$)", text)
+        body = body_match.group(1).strip() if body_match else ""
+        body = body[:360].strip(" -")
+
+        lines = [f"Latest indexed GitHub issue: #{number} - {title}."]
+        details = []
+        if state:
+            details.append(f"state: {state}")
+        if updated:
+            details.append(f"updated: {updated}")
+        if url:
+            details.append(f"url: {url}")
+        if details:
+            lines.append("Metadata: " + "; ".join(details) + ".")
+        if body:
+            lines.append(f"Summary: {body}")
+        return "\n".join(lines)
 
     @staticmethod
     def _compact_generic_context(item: str) -> str:

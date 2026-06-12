@@ -1,9 +1,10 @@
 import os
 import shutil
 import stat
+import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -31,12 +32,14 @@ from .models import (
     TopicGraphResponse,
     TopicSource,
 )
-from .storage import TopicStore
+from .storage import DEFAULT_USER_ID, TopicStore
 
 app = FastAPI(title="QA Agent", version="0.1.0")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+USER_COOKIE_NAME = "qa_agent_user"
+USER_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 def _resolve_topic_graph_path(topic: Topic, topics_dir: Path) -> Path | None:
     topic_dir = topics_dir / topic.id
@@ -62,6 +65,35 @@ def _resolve_topic_graph_path(topic: Topic, topics_dir: Path) -> Path | None:
 
 def get_store(settings: Settings = Depends(get_settings)) -> TopicStore:
     return TopicStore(settings.database_path)
+
+
+def _issue_user_id() -> str:
+    return f"user-{uuid.uuid4().hex}"
+
+
+def _resolve_user_id(request: Request) -> tuple[str, bool]:
+    current = (request.cookies.get(USER_COOKIE_NAME) or "").strip()
+    if current and current.startswith("user-") and len(current) <= 64:
+        return current, False
+    return _issue_user_id(), True
+
+
+def _set_user_cookie(response: Response, user_id: str) -> None:
+    response.set_cookie(
+        USER_COOKIE_NAME,
+        user_id,
+        max_age=USER_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+def get_user_id(request: Request, response: Response) -> str:
+    user_id, should_set_cookie = _resolve_user_id(request)
+    if should_set_cookie:
+        _set_user_cookie(response, user_id)
+    return user_id
 
 
 def _handle_remove_readonly(func, path, excinfo) -> None:
@@ -106,16 +138,17 @@ def default_llm_settings(settings: Settings) -> LlmSettings:
     )
 
 
-def effective_llm_settings(settings: Settings, store: TopicStore) -> LlmSettings:
+def effective_llm_settings(settings: Settings, store: TopicStore, user_id: str = DEFAULT_USER_ID) -> LlmSettings:
     defaults = default_llm_settings(settings)
-    return store.get_llm_settings(defaults)
+    return store.get_llm_settings(defaults, user_id=user_id)
 
 
 def get_agent(
     settings: Settings = Depends(get_settings),
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
 ) -> QaAgent:
-    llm = effective_llm_settings(settings, store)
+    llm = effective_llm_settings(settings, store, user_id)
     return QaAgent(
         llm.provider,
         local_base_url=llm.local_base_url,
@@ -130,26 +163,35 @@ def get_agent(
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def index(request: Request) -> FileResponse:
+    response = FileResponse(STATIC_DIR / "index.html")
+    user_id, should_set_cookie = _resolve_user_id(request)
+    if should_set_cookie:
+        _set_user_cookie(response, user_id)
+    return response
 
 
 @app.get("/chat")
-def chat() -> FileResponse:
-    return FileResponse(STATIC_DIR / "chat.html")
+def chat(request: Request) -> FileResponse:
+    response = FileResponse(STATIC_DIR / "chat.html")
+    user_id, should_set_cookie = _resolve_user_id(request)
+    if should_set_cookie:
+        _set_user_cookie(response, user_id)
+    return response
 
 
 @app.get("/api/topics", response_model=list[Topic])
-def list_topics(store: TopicStore = Depends(get_store)) -> list[Topic]:
-    return store.list_topics()
+def list_topics(user_id: str = Depends(get_user_id), store: TopicStore = Depends(get_store)) -> list[Topic]:
+    return store.list_topics(user_id=user_id)
 
 
 @app.get("/api/llm-settings", response_model=LlmSettings)
 def get_llm_settings(
     settings: Settings = Depends(get_settings),
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
 ) -> LlmSettings:
-    return effective_llm_settings(settings, store)
+    return effective_llm_settings(settings, store, user_id)
 
 
 @app.get("/api/llm-settings/defaults", response_model=LlmSettings)
@@ -158,13 +200,21 @@ def get_default_llm_settings(settings: Settings = Depends(get_settings)) -> LlmS
 
 
 @app.put("/api/llm-settings", response_model=LlmSettings)
-def update_llm_settings(payload: LlmSettings, store: TopicStore = Depends(get_store)) -> LlmSettings:
-    return store.update_llm_settings(payload)
+def update_llm_settings(
+    payload: LlmSettings,
+    user_id: str = Depends(get_user_id),
+    store: TopicStore = Depends(get_store),
+) -> LlmSettings:
+    return store.update_llm_settings(payload, user_id=user_id)
 
 
 @app.post("/api/topics", response_model=Topic)
-def create_topic(payload: TopicCreate, store: TopicStore = Depends(get_store)) -> Topic:
-    return store.create_topic(payload)
+def create_topic(
+    payload: TopicCreate,
+    user_id: str = Depends(get_user_id),
+    store: TopicStore = Depends(get_store),
+) -> Topic:
+    return store.create_topic(payload, user_id=user_id)
 
 
 @app.post("/api/agent/topic-draft", response_model=AgentTopicDraft)
@@ -177,30 +227,47 @@ def create_agent_topic_draft(
 
 
 @app.get("/api/threads", response_model=list[ChatThread])
-def list_threads(topic_id: str | None = None, store: TopicStore = Depends(get_store)) -> list[ChatThread]:
-    return store.list_threads(topic_id)
+def list_threads(
+    topic_id: str | None = None,
+    user_id: str = Depends(get_user_id),
+    store: TopicStore = Depends(get_store),
+) -> list[ChatThread]:
+    return store.list_threads(topic_id, user_id=user_id)
 
 
 @app.get("/api/threads/{thread_id}/messages", response_model=list[ChatMessage])
-def list_thread_messages(thread_id: str, store: TopicStore = Depends(get_store)) -> list[ChatMessage]:
+def list_thread_messages(
+    thread_id: str,
+    user_id: str = Depends(get_user_id),
+    store: TopicStore = Depends(get_store),
+) -> list[ChatMessage]:
     try:
-        return store.list_messages(thread_id)
+        return store.list_messages(thread_id, user_id=user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Thread not found") from exc
 
 
 @app.post("/api/topics/{topic_id}/threads", response_model=ChatThread)
-def create_thread(topic_id: str, payload: ThreadCreate, store: TopicStore = Depends(get_store)) -> ChatThread:
+def create_thread(
+    topic_id: str,
+    payload: ThreadCreate,
+    user_id: str = Depends(get_user_id),
+    store: TopicStore = Depends(get_store),
+) -> ChatThread:
     try:
-        return store.create_thread(topic_id, payload)
+        return store.create_thread(topic_id, payload, user_id=user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc
 
 
 @app.delete("/api/threads/{thread_id}", status_code=204)
-def delete_thread(thread_id: str, store: TopicStore = Depends(get_store)) -> None:
+def delete_thread(
+    thread_id: str,
+    user_id: str = Depends(get_user_id),
+    store: TopicStore = Depends(get_store),
+) -> None:
     try:
-        store.delete_thread(thread_id)
+        store.delete_thread(thread_id, user_id=user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Thread not found") from exc
 
@@ -209,27 +276,28 @@ def delete_thread(thread_id: str, store: TopicStore = Depends(get_store)) -> Non
 def create_thread_message(
     thread_id: str,
     payload: ThreadMessageCreate,
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
     agent: QaAgent = Depends(get_agent),
 ) -> ThreadMessageResponse:
     try:
-        thread = store.get_thread(thread_id)
-        topic = store.get_topic(thread.topic_id)
+        thread = store.get_thread(thread_id, user_id=user_id)
+        topic = store.get_topic(thread.topic_id, user_id=user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Thread not found") from exc
 
-    user_message = store.append_message(thread_id, "user", payload.text)
+    user_message = store.append_message(thread_id, "user", payload.text, user_id=user_id)
     if thread.title.strip().lower() == "new chat":
         trimmed_title = " ".join(payload.text.strip().split())
-        store.rename_thread(thread_id, trimmed_title[:80] or "New chat")
+        store.rename_thread(thread_id, trimmed_title[:80] or "New chat", user_id=user_id)
 
     try:
         response = agent.answer(topic, payload.text, payload.max_context_items)
     except Exception as exc:
-        assistant_message = store.append_message(thread_id, "agent", str(exc))
+        assistant_message = store.append_message(thread_id, "agent", str(exc), user_id=user_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    assistant_message = store.append_message(thread_id, "agent", response.answer)
+    assistant_message = store.append_message(thread_id, "agent", response.answer, user_id=user_id)
     return ThreadMessageResponse(
         thread_id=thread_id,
         topic_id=thread.topic_id,
@@ -245,13 +313,14 @@ def refresh_thread_message(
     thread_id: str,
     message_id: str,
     payload: ThreadMessageCreate,
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
     agent: QaAgent = Depends(get_agent),
 ) -> ChatMessage:
     try:
-        thread = store.get_thread(thread_id)
-        topic = store.get_topic(thread.topic_id)
-        messages = store.list_messages(thread_id)
+        thread = store.get_thread(thread_id, user_id=user_id)
+        topic = store.get_topic(thread.topic_id, user_id=user_id)
+        messages = store.list_messages(thread_id, user_id=user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Thread not found") from exc
 
@@ -272,13 +341,17 @@ def refresh_thread_message(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return store.update_message_text(message_id, response.answer)
+    return store.update_message_text(message_id, response.answer, user_id=user_id)
 
 
 @app.get("/api/topics/{topic_id}", response_model=Topic)
-def get_topic(topic_id: str, store: TopicStore = Depends(get_store)) -> Topic:
+def get_topic(
+    topic_id: str,
+    user_id: str = Depends(get_user_id),
+    store: TopicStore = Depends(get_store),
+) -> Topic:
     try:
-        return store.get_topic(topic_id)
+        return store.get_topic(topic_id, user_id=user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc
 
@@ -286,11 +359,12 @@ def get_topic(topic_id: str, store: TopicStore = Depends(get_store)) -> Topic:
 @app.get("/api/topics/{topic_id}/sources", response_model=list[TopicSource])
 def list_topic_sources(
     topic_id: str,
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
     ingestion: IngestionService = Depends(get_ingestion),
 ) -> list[TopicSource]:
     try:
-        topic = store.get_topic(topic_id)
+        topic = store.get_topic(topic_id, user_id=user_id)
         return ingestion.list_sources(topic)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc
@@ -300,10 +374,11 @@ def list_topic_sources(
 def get_topic_graph(
     topic_id: str,
     settings: Settings = Depends(get_settings),
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
 ) -> TopicGraphResponse:
     try:
-        topic = store.get_topic(topic_id)
+        topic = store.get_topic(topic_id, user_id=user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc
 
@@ -322,11 +397,12 @@ def get_topic_graph(
 def delete_topic_source(
     topic_id: str,
     source_id: str,
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
     ingestion: IngestionService = Depends(get_ingestion),
 ) -> Topic:
     try:
-        topic = store.get_topic(topic_id)
+        topic = store.get_topic(topic_id, user_id=user_id)
         return ingestion.remove_source(topic, source_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Source not found") from exc
@@ -337,14 +413,15 @@ def delete_topic_source(
 @app.delete("/api/topics/{topic_id}", status_code=204)
 def delete_topic(
     topic_id: str,
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
     ingestion: IngestionService = Depends(get_ingestion),
 ) -> None:
     try:
-        store.get_topic(topic_id)
+        store.get_topic(topic_id, user_id=user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc
-    store.delete_topic(topic_id)
+    store.delete_topic(topic_id, user_id=user_id)
     topic_dir = ingestion.topic_dir(topic_id)
     if topic_dir.exists():
         shutil.rmtree(topic_dir, onexc=_handle_remove_readonly)
@@ -354,11 +431,12 @@ def delete_topic(
 def ingest_topic(
     topic_id: str,
     payload: IngestRequest,
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
     ingestion: IngestionService = Depends(get_ingestion),
 ) -> IngestResult:
     try:
-        topic = store.get_topic(topic_id)
+        topic = store.get_topic(topic_id, user_id=user_id)
         updated = ingestion.ingest(topic, payload)
         return IngestResult(topic=updated, message="Ingestion complete.")
     except KeyError as exc:
@@ -371,11 +449,12 @@ def ingest_topic(
 async def upload_topic_files(
     topic_id: str,
     files: list[UploadFile] = File(...),
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
     ingestion: IngestionService = Depends(get_ingestion),
 ) -> IngestResult:
     try:
-        topic = store.get_topic(topic_id)
+        topic = store.get_topic(topic_id, user_id=user_id)
         updated = await ingestion.ingest_uploads(topic, files)
         return IngestResult(topic=updated, message="Upload ingestion complete.")
     except KeyError as exc:
@@ -388,11 +467,12 @@ async def upload_topic_files(
 def ask_question(
     topic_id: str,
     payload: QuestionRequest,
+    user_id: str = Depends(get_user_id),
     store: TopicStore = Depends(get_store),
     agent: QaAgent = Depends(get_agent),
 ) -> QuestionResponse:
     try:
-        topic = store.get_topic(topic_id)
+        topic = store.get_topic(topic_id, user_id=user_id)
         return agent.answer(topic, payload.question, payload.max_context_items)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc

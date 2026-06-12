@@ -81,12 +81,14 @@ class IngestionService:
         self.store.update_topic_description(
             topic.id,
             "\n".join(entry["value"] for entry in remaining if entry["kind"] != "upload"),
+            user_id=topic.user_id,
         )
 
         if any(source_dir.iterdir()):
             graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
             return self.store.update_topic(
                 topic.id,
+                user_id=topic.user_id,
                 status="ready",
                 progress_percent=100,
                 progress_label="Ready",
@@ -95,6 +97,7 @@ class IngestionService:
             )
         return self.store.update_topic(
             topic.id,
+            user_id=topic.user_id,
             status="new",
             progress_percent=0,
             progress_label="",
@@ -106,28 +109,29 @@ class IngestionService:
         topic_dir = self.topic_dir(topic.id)
         source_dir = self._ensure_source_dir(topic_dir)
 
-        self._set_progress(topic.id, 5, "Preparing source", graph_path=None, last_error=None)
+        self._set_progress(topic.id, topic.user_id, 5, "Preparing source", graph_path=None, last_error=None)
         try:
             self.graphify.ensure_available()
-            self._set_progress(topic.id, 12, "Checking Graphify")
+            self._set_progress(topic.id, topic.user_id, 12, "Checking Graphify")
             if request.kind == "github":
-                self._set_progress(topic.id, 22, "Cloning repository")
+                self._set_progress(topic.id, topic.user_id, 22, "Cloning repository")
                 repo_dir = self._unique_path(source_dir, self._slug_name(Path(request.value).stem or "github-repo"))
                 self._clone_repo(request.value, repo_dir)
                 self._register_source(topic_dir, "github", request.value, request.value, repo_dir.relative_to(source_dir).as_posix())
-                self._set_progress(topic.id, 30, "Collecting GitHub context")
+                self._set_progress(topic.id, topic.user_id, 30, "Collecting GitHub context")
                 self.github_collector.collect(
                     request.value,
                     repo_dir,
                     progress=lambda index, total, label: self._set_progress(
                         topic.id,
+                        topic.user_id,
                         30 + int((index / total) * 45),
                         label,
                     ),
                 )
                 replacement_url = self._detect_repository_replacement(repo_dir)
                 if replacement_url:
-                    self._set_progress(topic.id, 76, "Following active repository")
+                    self._set_progress(topic.id, topic.user_id, 76, "Following active repository")
                     replacement_dir = self._unique_path(
                         source_dir,
                         self._slug_name(Path(replacement_url).stem or "active-repo"),
@@ -141,7 +145,7 @@ class IngestionService:
                         replacement_dir.relative_to(source_dir).as_posix(),
                     )
             elif request.kind == "local_path":
-                self._set_progress(topic.id, 35, "Copying local source")
+                self._set_progress(topic.id, topic.user_id, 35, "Copying local source")
                 source_path = Path(request.value)
                 target_dir = self._unique_path(source_dir, source_path.stem or source_path.name or "local-source")
                 self._copy_local_path(source_path, target_dir)
@@ -154,23 +158,25 @@ class IngestionService:
                 )
             else:
                 raise ValueError("Upload ingestion must use the upload endpoint.")
-            self._sync_topic_description(topic.id, topic_dir)
-            self._set_progress(topic.id, 82, "Building graph")
+            self._sync_topic_description(topic.id, topic_dir, topic.user_id)
+            self._set_progress(topic.id, topic.user_id, 82, "Building graph")
             graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
-            self._set_progress(topic.id, 96, "Finalizing graph", graph_path=str(graph_path))
+            self._set_progress(topic.id, topic.user_id, 96, "Finalizing graph", graph_path=str(graph_path))
             updated = self.store.update_topic(
                 topic.id,
+                user_id=topic.user_id,
                 status="ready",
                 progress_percent=100,
                 progress_label="Ready",
                 graph_path=str(graph_path),
                 last_error=None,
             )
-            self.store.delete_threads_by_title(topic.id, "Topic chat")
+            self.store.delete_threads_by_title(topic.id, "Topic chat", user_id=topic.user_id)
             return updated
         except Exception as exc:
             self.store.update_topic(
                 topic.id,
+                user_id=topic.user_id,
                 status="error",
                 progress_percent=0,
                 progress_label="Failed",
@@ -182,7 +188,7 @@ class IngestionService:
     async def ingest_uploads(self, topic: Topic, files: list[UploadFile]) -> Topic:
         topic_dir = self.topic_dir(topic.id)
         source_dir = self._ensure_source_dir(topic_dir)
-        self._set_progress(topic.id, 5, "Preparing upload", graph_path=None, last_error=None)
+        self._set_progress(topic.id, topic.user_id, 5, "Preparing upload", graph_path=None, last_error=None)
 
         try:
             self.graphify.ensure_available()
@@ -200,24 +206,26 @@ class IngestionService:
                     safe_name,
                     target.relative_to(source_dir).as_posix(),
                 )
-                self._set_progress(topic.id, 15 + int((index / total_files) * 55), f"Uploaded {safe_name}")
-            self._sync_topic_description(topic.id, topic_dir)
-            self._set_progress(topic.id, 82, "Building graph")
+                self._set_progress(topic.id, topic.user_id, 15 + int((index / total_files) * 55), f"Uploaded {safe_name}")
+            self._sync_topic_description(topic.id, topic_dir, topic.user_id)
+            self._set_progress(topic.id, topic.user_id, 82, "Building graph")
             graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
-            self._set_progress(topic.id, 96, "Finalizing graph", graph_path=str(graph_path))
+            self._set_progress(topic.id, topic.user_id, 96, "Finalizing graph", graph_path=str(graph_path))
             updated = self.store.update_topic(
                 topic.id,
+                user_id=topic.user_id,
                 status="ready",
                 progress_percent=100,
                 progress_label="Ready",
                 graph_path=str(graph_path),
                 last_error=None,
             )
-            self.store.delete_threads_by_title(topic.id, "Topic chat")
+            self.store.delete_threads_by_title(topic.id, "Topic chat", user_id=topic.user_id)
             return updated
         except Exception as exc:
             self.store.update_topic(
                 topic.id,
+                user_id=topic.user_id,
                 status="error",
                 progress_percent=0,
                 progress_label="Failed",
@@ -308,6 +316,7 @@ class IngestionService:
     def _set_progress(
         self,
         topic_id: str,
+        user_id: str,
         percent: int,
         label: str,
         *,
@@ -316,6 +325,7 @@ class IngestionService:
     ) -> Topic:
         return self.store.update_topic(
             topic_id,
+            user_id=user_id,
             status="indexing",
             progress_percent=max(0, min(99, percent)),
             progress_label=label,
@@ -428,10 +438,10 @@ class IngestionService:
         manifest.append(self._manifest_entry(kind, label, value, relative_path))
         self._save_manifest(topic_dir, manifest)
 
-    def _sync_topic_description(self, topic_id: str, topic_dir: Path) -> None:
+    def _sync_topic_description(self, topic_id: str, topic_dir: Path, user_id: str) -> None:
         manifest = self._load_manifest(topic_dir)
         description = "\n".join(entry["value"] for entry in manifest if entry["kind"] != "upload")
-        self.store.update_topic_description(topic_id, description)
+        self.store.update_topic_description(topic_id, description, user_id=user_id)
 
     @classmethod
     def _diagnose_archived_repository(cls, source_dir: Path) -> str | None:

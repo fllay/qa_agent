@@ -151,6 +151,31 @@ def test_broad_repo_question_passes_clean_context_to_llm(tmp_path, monkeypatch):
     assert all("This is bad practice" not in item for item in captured["context_items"])
 
 
+def test_local_fallback_answers_issue_question_from_issue_context():
+    context_items = [
+        (
+            "file::acmenet::_github/issues.md | _github/issues.md | document | "
+            "data\\topics\\topic\\source\\acmenet\\_github\\issues.md | "
+            "Repository acmenet. File _github/issues.md. Content snippet: "
+            "# Issues ## Issue #42: Packet scheduler stalls - State: open - Author: dana "
+            "- Created: 2026-02-14T12:00:10Z - Updated: 2026-02-16T22:48:30Z "
+            "- URL: https://github.com/acme/acmenet/issues/42 - Labels: scheduler "
+            "### Body The scheduler stops processing packets after several hours under load."
+        ),
+        (
+            "repo::acmenet | acmenet | repository | data\\topics\\topic\\source\\acmenet | "
+            "Repository snapshot with 240 files. Key files: README.md. "
+            "AcmeNet is a network control project."
+        ),
+    ]
+
+    answer = QaAgent._generate_local_context_answer("can i have latest issue on the project", context_items)
+
+    assert "Latest indexed GitHub issue: #42 - Packet scheduler stalls." in answer
+    assert "updated: 2026-02-16T22:48:30Z" in answer
+    assert "network control project" not in answer
+
+
 def test_openrouter_requires_three_models():
     agent = QaAgent(
         "openrouter",

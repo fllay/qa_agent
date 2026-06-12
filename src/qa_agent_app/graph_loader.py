@@ -21,10 +21,17 @@ class GraphIndex:
     def search(self, question: str, limit: int = 8) -> list[dict[str, Any]]:
         query_terms = _terms(question)
         broad_project_question = bool(query_terms & {"repo", "repository", "project", "summary", "summarize", "overview"})
+        issue_question = bool(query_terms & {"issue", "issues", "bug", "bugs", "ticket", "tickets"})
         scored: list[dict[str, Any]] = []
         for node_id, attrs in self.graph.nodes(data=True):
             text = _node_text(node_id, attrs)
-            score = _score(query_terms, text, attrs, broad_project_question=broad_project_question)
+            score = _score(
+                query_terms,
+                text,
+                attrs,
+                broad_project_question=broad_project_question,
+                issue_question=issue_question,
+            )
             if score > 0:
                 scored.append(
                     {
@@ -71,11 +78,15 @@ def _terms(text: str) -> set[str]:
         "about",
         "using",
     }
-    return {
-        part.lower()
-        for part in "".join(ch if ch.isalnum() else " " for ch in text).split()
-        if len(part) > 2 and part.lower() not in stopwords
-    }
+    terms: set[str] = set()
+    for part in "".join(ch if ch.isalnum() else " " for ch in text).split():
+        term = part.lower()
+        if len(term) <= 2 or term in stopwords:
+            continue
+        terms.add(term)
+        if len(term) > 3 and term.endswith("s"):
+            terms.add(term[:-1])
+    return terms
 
 
 def _node_text(node_id: object, attrs: dict[str, Any]) -> str:
@@ -93,6 +104,7 @@ def _score(
     attrs: dict[str, Any] | None = None,
     *,
     broad_project_question: bool = False,
+    issue_question: bool = False,
 ) -> float:
     if not query_terms:
         return 0
@@ -108,6 +120,11 @@ def _score(
         score += 0.2
     if broad_project_question and node_type in {"code", "config"} and "readme" not in path.replace("\\", "/"):
         score *= 0.45
+    normalized_path = path.replace("\\", "/")
+    if issue_question and ("_github/issues" in normalized_path or label == "issues.md"):
+        score += 0.75
+    if issue_question and node_type in {"code", "config"}:
+        score *= 0.35
     return score
 
 

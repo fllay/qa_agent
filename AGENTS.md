@@ -134,6 +134,9 @@
 
 ## 2026-06-12
 
+- Hardened SQLite cookie-session migrations further by tolerating duplicate `user_id` column adds on re-init, added idempotent re-open coverage, and live-verified `/chat`, `/api/topics`, and `/api/threads` return HTTP 200 against the current app database.
+- Fixed cookie-scoped session rollout startup on older SQLite files by migrating legacy `topics`/`chat_threads` columns before creating `user_id` indexes, and added regression coverage for opening the chat page against pre-cookie databases.
+- Added cookie-based user session recognition (`qa_agent_user`) and scoped topics, threads, messages, and saved LLM settings to that cookie so different browsers get isolated QA Agent workspaces against the same app database.
 - Fixed the pending assistant loading bubble in chat by rendering it through the normal `message-shell` wrapper and forcing the loader dots to stay in a horizontal inline-flex row instead of stacking vertically.
 - Fixed chat bubble sizing so user messages use the same shell-level max width as assistant messages, avoiding the overly narrow `fit-content` wrapping that made short user prompts break into stacked lines too early.
 - Added the same hover/focus toolbar treatment to user chat bubbles, with `copy` and `edit` actions; edit restores the selected user message text into the composer for modification and resend.
@@ -143,6 +146,7 @@
 - Polished assistant rich-text rendering by turning literal `<br>` tags into real line breaks, improving table presentation with a rounded container and less cramped columns, and bumping the chat asset versions so the browser refreshes the updated Markdown styles.
 - Fixed broad graph-RAG project questions so repository/README context is prioritized over noisy config/code snippets while still passing the cleaned context through the configured LLM; deterministic repository summaries remain only as the local-provider fallback.
 - Changed effective LLM settings resolution so explicit `.env` or environment variables take precedence over older SQLite-persisted LLM settings, preventing stale `local` provider rows from overriding OpenRouter config.
+- Improved issue-oriented graph-RAG questions by normalizing simple plurals, boosting indexed `_github/issues.md` context, and making the local fallback extract the latest indexed GitHub issue instead of returning a broad project summary.
 - Changed QA Agent chat topic creation so prompts containing source URLs now auto-detect and attach those sources, create the topic immediately, and start indexing without requiring a separate manual source step.
 - Added an agent topic-draft backend path that uses the configured LLM to suggest a concise topic name from the prompt and detected sources, with deterministic URL-based fallback naming when no model is available.
 - Added regression tests for source extraction, URL cleanup, and fallback topic naming, and bumped the chat asset version so browsers load the updated create-topic flow.
@@ -158,3 +162,13 @@
 - Rebalanced the LLM settings popup close `x` icon and changed the modal plus inner settings panels to a plain white background, then bumped the chat asset version again so the updated styling replaces cached CSS.
 - Replaced the font-rendered LLM settings close `x` with a drawn cross icon in CSS so the close button stays visually centered across browsers.
 - Applied a small rightward optical offset to the drawn LLM settings close icon so the `x` no longer reads slightly left of center inside the circle.
+- Standardized all modal close buttons to the same top-right circular `x` control across create-topic, topic-settings, model-settings, and graph dialogs, and bumped the chat asset version so cached UI picks up the shared close-button pattern.
+- Increased the vertical gap between the home-page action buttons and the instruction cards below them so the CTA row does not feel crowded against the three setup steps.
+- Added explicit top margin on the home-page instruction-card section itself, because button-only spacing was visually swallowed by the hero layout and did not create enough separation on screen.
+- Increased the home-page instruction-card top margin again so the action buttons sit farther above the three setup cards.
+- Replaced the home-page instruction-card top margin with real top padding so adjacent section margin-collapsing does not swallow the intended gap under the action buttons.
+- Increased the spacing inside the home-page instruction cards between each step title and its descriptive text.
+- Moved the extra home-page CTA-to-cards spacing onto the button row itself by increasing the action-row bottom margin, so the visible gap between the two buttons and the instruction cards is controlled directly.
+- Reworked the home-page hero spacing at the section level by adding a consistent hero grid gap and bottom padding, so the button row and instruction cards have reliable separation without depending on child margins.
+- Added a cache-busting query to the home-page stylesheet link and moved hero-to-cards spacing into a shared `home-flow` wrapper gap, so landing-page spacing updates apply reliably and are controlled at the section level.
+- Compressed the home-page layout overall by reducing shell padding, hero top space, heading scale, section gap, and card padding so the landing content fits a typical desktop viewport without scrolling.

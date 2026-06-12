@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QA Agent</title>
-    <link rel="stylesheet" href="/static/chat.css?v=20260612-llmsettings3" />
+    <link rel="stylesheet" href="/static/chat.css?v=20260612-modalclose1" />
   </head>
   <body>
     <main class="chat-shell">
@@ -47,9 +47,9 @@
 
     <dialog id="topic-modal" class="topic-modal">
       <form id="modal-topic-form" method="dialog">
-        <div class="modal-head">
+        <button id="close-modal" class="modal-close-button" type="button" aria-label="Close create topic">×</button>
+        <div class="modal-head modal-head-with-close">
           <h2>Create Topic</h2>
-          <button id="close-modal" type="button" aria-label="Close">×</button>
         </div>
         <label>
           Topic name
@@ -72,9 +72,9 @@
 
     <dialog id="topic-settings-modal" class="topic-modal">
       <form id="topic-settings-form" method="dialog">
-        <div class="modal-head">
+        <button id="close-topic-settings" class="modal-close-button" type="button" aria-label="Close topic settings">×</button>
+        <div class="modal-head modal-head-with-close">
           <h2 id="topic-settings-title">Topic settings</h2>
-          <button id="close-topic-settings" type="button" aria-label="Close">Close</button>
         </div>
         <label>
           Add source
@@ -94,7 +94,7 @@
     <dialog id="llm-settings-modal" class="topic-modal llm-settings-modal">
       <form id="llm-settings-form" method="dialog">
         <button id="close-llm-settings" class="modal-close-button" type="button" aria-label="Close model settings">×</button>
-        <div class="modal-head llm-settings-head">
+        <div class="modal-head modal-head-with-close llm-settings-head">
           <h2>Model settings</h2>
         </div>
         <label>
@@ -151,12 +151,12 @@
 
     <dialog id="topic-graph-modal" class="topic-modal graph-modal">
       <div class="graph-modal-layout">
-        <div class="modal-head">
+        <button id="close-topic-graph" class="modal-close-button" type="button" aria-label="Close topic graph">×</button>
+        <div class="modal-head modal-head-with-close">
           <div class="graph-modal-heading">
             <h2 id="topic-graph-title">Topic graph</h2>
             <p id="topic-graph-subtitle">Graph preview</p>
           </div>
-          <button id="close-topic-graph" type="button" aria-label="Close">Close</button>
         </div>
         <div class="graph-modal-content">
           <section class="graph-preview-card">
@@ -191,6 +191,6 @@
     </dialog>
 
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/chat.js?v=20260612-llmsettings3"></script>
+    <script src="/static/chat.js?v=20260612-modalclose1"></script>
   </body>
 </html>

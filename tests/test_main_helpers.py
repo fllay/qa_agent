@@ -43,10 +43,11 @@ def test_persisted_llm_settings_override_env_defaults(tmp_path, monkeypatch):
             openrouter_main_model="persisted-main",
             openrouter_reserve_model_1="persisted-reserve-a",
             openrouter_reserve_model_2="persisted-reserve-b",
-        )
+        ),
+        user_id="user-test",
     )
 
-    llm = effective_llm_settings(Settings(), store)
+    llm = effective_llm_settings(Settings(), store, "user-test")
 
     assert llm.provider == "local"
     assert llm.openrouter_main_model == "persisted-main"

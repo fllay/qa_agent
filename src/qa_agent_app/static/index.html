@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QA Agent</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260612-home-spacing-2" />
   </head>
   <body class="home-page">
     <main class="home-shell">
@@ -13,35 +13,37 @@
         <a class="nav-button" href="/chat">Open Chat</a>
       </nav>
 
-      <section class="home-hero">
-        <p class="eyebrow">Knowledge Q&A</p>
-        <h1>Ask questions about your docs and GitHub repos.</h1>
-        <p>
-          Create topics, add sources, and use focused chat threads to ask questions against the right context.
-        </p>
-        <div class="home-actions">
-          <a class="primary-link" href="/chat">Start Agent Chat</a>
-          <a class="secondary-link" href="/chat?createTopic=true">Create Topic Manually</a>
-        </div>
-      </section>
+      <div class="home-flow">
+        <section class="home-hero">
+          <p class="eyebrow">Knowledge Q&A</p>
+          <h1>Ask questions about your docs and GitHub repos.</h1>
+          <p>
+            Create topics, add sources, and use focused chat threads to ask questions against the right context.
+          </p>
+          <div class="home-actions">
+            <a class="primary-link" href="/chat">Start Agent Chat</a>
+            <a class="secondary-link" href="/chat?createTopic=true">Create Topic Manually</a>
+          </div>
+        </section>
 
-      <section class="home-cards">
-        <article>
-          <span>01</span>
-          <strong>Create a topic</strong>
-          <p>Keep each project or knowledge area separate.</p>
-        </article>
-        <article>
-          <span>02</span>
-          <strong>Add sources</strong>
-          <p>Use GitHub URLs, website URLs, or documents.</p>
-        </article>
-        <article>
-          <span>03</span>
-          <strong>Chat in threads</strong>
-          <p>Use sub-threads inside each topic for focused Q&A.</p>
-        </article>
-      </section>
+        <section class="home-cards">
+          <article>
+            <span>01</span>
+            <strong>Create a topic</strong>
+            <p>Keep each project or knowledge area separate.</p>
+          </article>
+          <article>
+            <span>02</span>
+            <strong>Add sources</strong>
+            <p>Use GitHub URLs, website URLs, or documents.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <strong>Chat in threads</strong>
+            <p>Use sub-threads inside each topic for focused Q&A.</p>
+          </article>
+        </section>
+      </div>
     </main>
   </body>
 </html>
