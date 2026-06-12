@@ -36,16 +36,26 @@ docker compose up --build
 
 Open `http://127.0.0.1:8000`. The compose setup bind-mounts `./data` into the container so topic workspaces, Graphify outputs, and SQLite state persist locally.
 
-The image includes Git for repository ingestion. Graphify is still an external CLI dependency: install it in a custom image or provide a compatible `GRAPHIFY_BIN` command inside the container before running Graphify-backed ingestion.
+The image includes Git and installs Graphify from the `graphifyy` package by default. A normal Compose build is enough:
 
-If your host `.env` points `GRAPHIFY_BIN` at a Windows path, leave it as-is for local runs and set `QA_AGENT_DOCKER_GRAPHIFY_BIN` to the Linux path available inside the container.
+```powershell
+docker compose up --build
+```
+
+Override the packaged Graphify version only when needed:
+
+```powershell
+docker compose build --build-arg GRAPHIFYY_VERSION=0.8.38
+```
+
+`GRAPHIFY_BIN=auto` resolves to `graphify` on `PATH`, then falls back to the newest Windows user-site `graphify.exe` when available. Docker uses the built-in `graphify` command by default; set `QA_AGENT_DOCKER_GRAPHIFY_BIN` only if you override Graphify with a non-default Linux path inside the container.
 
 ## Graphify
 
-Install Graphify separately and set `GRAPHIFY_BIN` in `.env` if the command is not `graphify`.
+Install Graphify separately. The default `GRAPHIFY_BIN=auto` uses `graphify` on `PATH` or the newest Windows user-site `graphify.exe` when available. Set `GRAPHIFY_BIN` to an explicit command or path if auto-detection is not enough.
 
 ```env
-GRAPHIFY_BIN=graphify
+GRAPHIFY_BIN=auto
 ```
 
 The app runs Graphify inside each topic workspace and searches for the newest `graph.json`.

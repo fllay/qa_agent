@@ -1,8 +1,33 @@
 from functools import lru_cache
 from pathlib import Path
+import glob
+import os
+import shutil
 
 from pydantic import AliasChoices, Field
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def resolve_graphify_bin(command: str) -> str:
+    value = command.strip()
+    if value.lower() != "auto":
+        return value or "graphify"
+
+    path_command = shutil.which("graphify")
+    if path_command:
+        return path_command
+
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            pattern = os.path.join(appdata, "Python", "Python*", "Scripts", "graphify.exe")
+            candidates = sorted(glob.glob(pattern), reverse=True)
+            for candidate in candidates:
+                if os.path.isfile(candidate):
+                    return candidate
+
+    return "graphify"
 
 
 class Settings(BaseSettings):
@@ -11,7 +36,7 @@ class Settings(BaseSettings):
         default=Path("data/qa_agent.sqlite"),
         validation_alias=AliasChoices("QA_AGENT_DATABASE_PATH", "DATABASE_PATH"),
     )
-    graphify_bin: str = Field(default="graphify", validation_alias=AliasChoices("GRAPHIFY_BIN", "QA_AGENT_GRAPHIFY_BIN"))
+    graphify_bin: str = Field(default="auto", validation_alias=AliasChoices("GRAPHIFY_BIN", "QA_AGENT_GRAPHIFY_BIN"))
     graphify_timeout_seconds: int = Field(
         default=900,
         validation_alias=AliasChoices("GRAPHIFY_TIMEOUT_SECONDS", "QA_AGENT_GRAPHIFY_TIMEOUT_SECONDS"),
@@ -62,6 +87,11 @@ class Settings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def resolve_adaptive_graphify_bin(self) -> "Settings":
+        self.graphify_bin = resolve_graphify_bin(self.graphify_bin)
+        return self
 
     @property
     def topics_dir(self) -> Path:

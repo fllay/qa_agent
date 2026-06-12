@@ -174,3 +174,6 @@
 - Compressed the home-page layout overall by reducing shell padding, hero top space, heading scale, section gap, and card padding so the landing content fits a typical desktop viewport without scrolling.
 - Added Docker support with a Python slim `Dockerfile`, Docker Compose service, `.dockerignore`, persistent `/app/data` mapping, packaged static assets, and README instructions for containerized startup.
 - Updated stale agent test fixtures to include the required `Topic.user_id` field so the existing suite passes with the current topic model.
+- Added adaptive Graphify binary resolution via `GRAPHIFY_BIN=auto`, including PATH lookup, Windows user-site fallback, updated env examples, docs, and regression tests.
+- Updated the Docker build to install the Graphify CLI from the `graphifyy` package with a build-time version argument.
+- Made Docker Graphify installation the default verified path by checking `graphify --version` during image build and clarifying that plain `docker compose up --build` includes Graphify.

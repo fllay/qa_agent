@@ -2,6 +2,8 @@ services:
   qa-agent:
     build:
       context: .
+      args:
+        GRAPHIFYY_VERSION: ${GRAPHIFYY_VERSION:-0.8.38}
     environment:
       QA_AGENT_DATA_DIR: /app/data
       QA_AGENT_DATABASE_PATH: /app/data/qa_agent.sqlite

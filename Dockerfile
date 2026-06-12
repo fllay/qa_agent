@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+ARG GRAPHIFYY_VERSION=0.8.38
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -20,7 +22,10 @@ COPY src ./src
 
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
+    && pip install "graphifyy==${GRAPHIFYY_VERSION}" \
     && pip install .
+
+RUN graphify --version
 
 RUN useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/data \
