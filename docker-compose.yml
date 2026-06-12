@@ -1,0 +1,26 @@
+services:
+  qa-agent:
+    build:
+      context: .
+    environment:
+      QA_AGENT_DATA_DIR: /app/data
+      QA_AGENT_DATABASE_PATH: /app/data/qa_agent.sqlite
+      GRAPHIFY_BIN: ${QA_AGENT_DOCKER_GRAPHIFY_BIN:-graphify}
+      GRAPHIFY_TIMEOUT_SECONDS: ${GRAPHIFY_TIMEOUT_SECONDS:-900}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_MAX_PAGES: ${GITHUB_MAX_PAGES:-10}
+      GITHUB_PER_PAGE: ${GITHUB_PER_PAGE:-100}
+      QA_AGENT_LLM_PROVIDER: ${QA_AGENT_LLM_PROVIDER:-local}
+      QA_AGENT_LOCAL_LLM_BASE_URL: ${QA_AGENT_LOCAL_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      QA_AGENT_LOCAL_LLM_API_KEY: ${QA_AGENT_LOCAL_LLM_API_KEY:-local}
+      QA_AGENT_LOCAL_LLM_MODEL: ${QA_AGENT_LOCAL_LLM_MODEL:-llama3.1:8b}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_MAIN_MODEL: ${OPENROUTER_MAIN_MODEL:-openrouter/auto}
+      OPENROUTER_RESERVE_MODEL_1: ${OPENROUTER_RESERVE_MODEL_1:-openai/gpt-4o-mini}
+      OPENROUTER_RESERVE_MODEL_2: ${OPENROUTER_RESERVE_MODEL_2:-google/gemini-flash-1.5}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

@@ -25,6 +25,21 @@ python -m uvicorn qa_agent_app.main:app --reload
 
 Open `http://127.0.0.1:8000`.
 
+## Docker
+
+Build and run the app with Docker Compose:
+
+```powershell
+copy .env.example .env
+docker compose up --build
+```
+
+Open `http://127.0.0.1:8000`. The compose setup bind-mounts `./data` into the container so topic workspaces, Graphify outputs, and SQLite state persist locally.
+
+The image includes Git for repository ingestion. Graphify is still an external CLI dependency: install it in a custom image or provide a compatible `GRAPHIFY_BIN` command inside the container before running Graphify-backed ingestion.
+
+If your host `.env` points `GRAPHIFY_BIN` at a Windows path, leave it as-is for local runs and set `QA_AGENT_DOCKER_GRAPHIFY_BIN` to the Linux path available inside the container.
+
 ## Graphify
 
 Install Graphify separately and set `GRAPHIFY_BIN` in `.env` if the command is not `graphify`.

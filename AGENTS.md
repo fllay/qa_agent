@@ -172,3 +172,5 @@
 - Reworked the home-page hero spacing at the section level by adding a consistent hero grid gap and bottom padding, so the button row and instruction cards have reliable separation without depending on child margins.
 - Added a cache-busting query to the home-page stylesheet link and moved hero-to-cards spacing into a shared `home-flow` wrapper gap, so landing-page spacing updates apply reliably and are controlled at the section level.
 - Compressed the home-page layout overall by reducing shell padding, hero top space, heading scale, section gap, and card padding so the landing content fits a typical desktop viewport without scrolling.
+- Added Docker support with a Python slim `Dockerfile`, Docker Compose service, `.dockerignore`, persistent `/app/data` mapping, packaged static assets, and README instructions for containerized startup.
+- Updated stale agent test fixtures to include the required `Topic.user_id` field so the existing suite passes with the current topic model.

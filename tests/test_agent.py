@@ -22,6 +22,7 @@ def test_agent_answers_from_graph_context(tmp_path, monkeypatch):
 
     topic = Topic(
         id="topic-1",
+        user_id="user-test",
         name="Topic",
         status="ready",
         graph_path=str(graph_path),
@@ -136,6 +137,7 @@ def test_broad_repo_question_passes_clean_context_to_llm(tmp_path, monkeypatch):
     graph_path.write_text(json.dumps(json_graph.node_link_data(graph)), encoding="utf-8")
     topic = Topic(
         id="topic-1",
+        user_id="user-test",
         name="Topic",
         status="ready",
         graph_path=str(graph_path),
