@@ -1,6 +1,7 @@
+import re
 from pathlib import Path
 from typing import TypedDict
-import re
+from urllib.parse import urlparse
 
 from langgraph.graph import END, StateGraph
 
@@ -20,6 +21,8 @@ class AgentState(TypedDict):
 
 
 class QaAgent:
+    URL_PATTERN = re.compile(r"https?://[^\s<>\"]+", flags=re.IGNORECASE)
+
     def __init__(
         self,
         llm_provider: str = "local",
@@ -68,6 +71,11 @@ class QaAgent:
             citations=state["citations"],
             context_items=state["context_items"],
         )
+
+    def draft_topic(self, message: str) -> tuple[str, list[str]]:
+        sources = self.extract_sources(message)
+        name = self._suggest_topic_name(message, sources)
+        return name[:120], sources
 
     def _build_graph(self):
         graph = StateGraph(AgentState)
@@ -184,7 +192,12 @@ class QaAgent:
             messages=[
                 {
                     "role": "system",
-                    "content": "Answer using only the supplied graph context. If the context is insufficient, say so.",
+                    "content": (
+                        "Answer using only the supplied graph context. Synthesize the evidence instead of copying raw "
+                        "snippets verbatim. Match the user's requested level of technical detail. Prefer repository and "
+                        "README context for broad project questions, and use code/config snippets only when they add "
+                        "specific technical evidence. If the context is insufficient, say so."
+                    ),
                 },
                 {"role": "user", "content": f"Question: {question}\n\nGraph context:\n{context}"},
             ],
@@ -193,6 +206,134 @@ class QaAgent:
         content = response.choices[0].message.content
         return str(content or "")
 
+    def _suggest_topic_name(self, message: str, sources: list[str]) -> str:
+        provider = self.llm_provider.lower()
+        try:
+            if provider == "local":
+                return self._generate_topic_name_with_openai_compatible(
+                    message=message,
+                    sources=sources,
+                    base_url=self.local_base_url,
+                    api_key=self.local_api_key,
+                    model=self.local_model,
+                )
+            if provider == "openrouter" and self.openrouter_api_key:
+                return self._generate_topic_name_with_openai_compatible(
+                    message=message,
+                    sources=sources,
+                    base_url=self.openrouter_base_url,
+                    api_key=self.openrouter_api_key,
+                    model=self.openrouter_models[0],
+                    extra_body={"models": [model for model in self.openrouter_models if model]},
+                )
+        except Exception:
+            pass
+        return self._fallback_topic_name(message, sources)
+
+    @staticmethod
+    def _generate_topic_name_with_openai_compatible(
+        *,
+        message: str,
+        sources: list[str],
+        base_url: str,
+        api_key: str,
+        model: str,
+        extra_body: dict | None = None,
+    ) -> str:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=None)
+        source_lines = "\n".join(f"- {source}" for source in sources) or "- none provided"
+        kwargs = {"extra_body": extra_body} if extra_body else {}
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You create short topic names for a repository and document QA app. "
+                        "Return only the topic name. Prefer the real project or repository name from the source over "
+                        "the user's command phrasing. Keep it 2 to 6 words, clear, specific, and without quotes."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"User request:\n{message}\n\nDetected sources:\n{source_lines}",
+                },
+            ],
+            **kwargs,
+        )
+        content = str(response.choices[0].message.content or "").strip()
+        cleaned = QaAgent._sanitize_topic_name(content)
+        if cleaned:
+            return cleaned
+        return QaAgent._fallback_topic_name(message, sources)
+
+    @classmethod
+    def extract_sources(cls, message: str) -> list[str]:
+        seen: set[str] = set()
+        results: list[str] = []
+        for match in cls.URL_PATTERN.findall(message):
+            cleaned = match.rstrip(".,);:!?]}")
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                results.append(cleaned)
+        return results
+
+    @staticmethod
+    def _sanitize_topic_name(name: str) -> str:
+        cleaned = " ".join(name.replace("\n", " ").replace("\r", " ").split()).strip(" \"'")
+        if not cleaned:
+            return ""
+        if len(cleaned) > 120:
+            cleaned = cleaned[:120].rstrip()
+        return cleaned
+
+    @classmethod
+    def _fallback_topic_name(cls, message: str, sources: list[str]) -> str:
+        for source in sources:
+            inferred = cls._topic_name_from_source(source)
+            if inferred:
+                return inferred
+        stripped = re.sub(
+            r"^(please\s+)?(create|make|start|open|add)\s+(a\s+)?topic(\s+(about|for|from))?\s+",
+            "",
+            message.strip(),
+            flags=re.IGNORECASE,
+        )
+        stripped = cls._sanitize_topic_name(stripped)
+        return stripped or "New Topic"
+
+    @staticmethod
+    def _topic_name_from_source(source: str) -> str:
+        parsed = urlparse(source)
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if parsed.netloc.lower() in {"github.com", "www.github.com", "gitlab.com", "www.gitlab.com"} and len(path_parts) >= 2:
+            return QaAgent._humanize_topic_token(path_parts[1])
+        if path_parts:
+            return QaAgent._humanize_topic_token(path_parts[-1])
+        host = parsed.netloc.split(":")[0].strip()
+        return QaAgent._humanize_topic_token(host)
+
+    @staticmethod
+    def _humanize_topic_token(token: str) -> str:
+        base = re.sub(r"\.git$", "", token.strip(), flags=re.IGNORECASE)
+        base = re.sub(r"[_\-]+", " ", base)
+        base = re.sub(r"\s+", " ", base).strip()
+        if not base:
+            return "New Topic"
+        words = []
+        for part in base.split():
+            if part.isupper():
+                words.append(part)
+            elif any(ch.isdigit() for ch in part):
+                words.append(part)
+            elif len(part) <= 4 and part.lower() != "topic":
+                words.append(part)
+            else:
+                words.append(part.capitalize())
+        return " ".join(words)
+
     @staticmethod
     def _summarize_context_without_llm(question: str, context_items: list[str]) -> str:
         repo_summaries = [QaAgent._extract_repo_summary(item) for item in context_items]
@@ -200,7 +341,7 @@ class QaAgent:
         archive_notice = next((summary for summary in repo_summaries if summary.get("archived_redirect")), None)
         repo_descriptions = [summary for summary in repo_summaries if summary is not archive_notice]
         file_signals = [signal for signal in (QaAgent._extract_file_signal(item) for item in context_items) if signal]
-        broad_repo_question = bool(re.search(r"\b(describe|summary|summarize|project|repository|repo)\b", question, flags=re.IGNORECASE))
+        broad_repo_question = QaAgent._is_broad_repo_question(question)
 
         lines: list[str] = []
         overview = ""
@@ -257,6 +398,10 @@ class QaAgent:
 
         lines.append("Local LLM endpoint was not used, so this answer was assembled from indexed repository metadata.")
         return "\n".join(lines)
+
+    @staticmethod
+    def _is_broad_repo_question(question: str) -> bool:
+        return bool(re.search(r"\b(describe|summary|summarize|overview|project|repository|repo)\b", question, flags=re.IGNORECASE))
 
     @staticmethod
     def _extract_repo_summary(item: str) -> dict[str, object] | None:

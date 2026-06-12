@@ -20,10 +20,11 @@ class GraphIndex:
 
     def search(self, question: str, limit: int = 8) -> list[dict[str, Any]]:
         query_terms = _terms(question)
+        broad_project_question = bool(query_terms & {"repo", "repository", "project", "summary", "summarize", "overview"})
         scored: list[dict[str, Any]] = []
         for node_id, attrs in self.graph.nodes(data=True):
             text = _node_text(node_id, attrs)
-            score = _score(query_terms, text, attrs)
+            score = _score(query_terms, text, attrs, broad_project_question=broad_project_question)
             if score > 0:
                 scored.append(
                     {
@@ -58,7 +59,23 @@ class GraphIndex:
 
 
 def _terms(text: str) -> set[str]:
-    return {part.lower() for part in "".join(ch if ch.isalnum() else " " for ch in text).split() if len(part) > 2}
+    stopwords = {
+        "the",
+        "this",
+        "that",
+        "what",
+        "does",
+        "with",
+        "from",
+        "into",
+        "about",
+        "using",
+    }
+    return {
+        part.lower()
+        for part in "".join(ch if ch.isalnum() else " " for ch in text).split()
+        if len(part) > 2 and part.lower() not in stopwords
+    }
 
 
 def _node_text(node_id: object, attrs: dict[str, Any]) -> str:
@@ -70,15 +87,27 @@ def _node_text(node_id: object, attrs: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _score(query_terms: set[str], text: str, attrs: dict[str, Any] | None = None) -> float:
+def _score(
+    query_terms: set[str],
+    text: str,
+    attrs: dict[str, Any] | None = None,
+    *,
+    broad_project_question: bool = False,
+) -> float:
     if not query_terms:
         return 0
     text_terms = _terms(text)
     overlap = query_terms & text_terms
     score = len(overlap) / max(len(query_terms), 1)
     node_type = str((attrs or {}).get("type") or "").lower()
-    if node_type == "repository" and query_terms & {"repo", "repository", "project", "summary", "summarize"}:
+    path = str((attrs or {}).get("path") or (attrs or {}).get("file") or (attrs or {}).get("source") or "").lower()
+    label = str((attrs or {}).get("label") or (attrs or {}).get("name") or "").lower()
+    if node_type == "repository" and broad_project_question:
         score += 0.35
+    if broad_project_question and (label.startswith("readme") or "/readme" in path.replace("\\", "/")):
+        score += 0.2
+    if broad_project_question and node_type in {"code", "config"} and "readme" not in path.replace("\\", "/"):
+        score *= 0.45
     return score
 
 

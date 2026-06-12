@@ -69,6 +69,7 @@ class TopicStore:
     def create_topic(self, payload: TopicCreate) -> Topic:
         now = _now()
         topic_id = _slug_id(payload.name)
+        initial_thread_title = payload.initial_thread_title.strip() or "New chat"
         with self._connect() as conn:
             conn.execute(
                 """
@@ -81,9 +82,9 @@ class TopicStore:
             conn.execute(
                 """
                 INSERT INTO chat_threads (id, topic_id, title, created_at, updated_at)
-                VALUES (?, ?, 'New chat', ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (thread_id, topic_id, now, now),
+                (thread_id, topic_id, initial_thread_title, now, now),
             )
         return self.get_topic(topic_id)
 
@@ -162,6 +163,27 @@ class TopicStore:
             else:
                 rows = conn.execute("SELECT * FROM chat_threads ORDER BY updated_at DESC").fetchall()
         return [_row_to_thread(row) for row in rows]
+
+    def delete_thread(self, thread_id: str) -> None:
+        thread = self.get_thread(thread_id)
+        with self._connect() as conn:
+            conn.execute("DELETE FROM chat_threads WHERE id = ?", (thread_id,))
+            conn.execute("UPDATE topics SET updated_at = ? WHERE id = ?", (_now(), thread.topic_id))
+
+    def delete_threads_by_title(self, topic_id: str, title: str) -> int:
+        self.get_topic(topic_id)
+        normalized = title.strip()
+        if not normalized:
+            return 0
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM chat_threads WHERE topic_id = ? AND title = ?",
+                (topic_id, normalized),
+            )
+            deleted = int(cursor.rowcount or 0)
+            if deleted:
+                conn.execute("UPDATE topics SET updated_at = ? WHERE id = ?", (_now(), topic_id))
+        return deleted
 
     def create_thread(self, topic_id: str, payload: ThreadCreate) -> ChatThread:
         self.get_topic(topic_id)

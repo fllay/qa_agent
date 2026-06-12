@@ -158,7 +158,7 @@ class IngestionService:
             self._set_progress(topic.id, 82, "Building graph")
             graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
             self._set_progress(topic.id, 96, "Finalizing graph", graph_path=str(graph_path))
-            return self.store.update_topic(
+            updated = self.store.update_topic(
                 topic.id,
                 status="ready",
                 progress_percent=100,
@@ -166,6 +166,8 @@ class IngestionService:
                 graph_path=str(graph_path),
                 last_error=None,
             )
+            self.store.delete_threads_by_title(topic.id, "Topic chat")
+            return updated
         except Exception as exc:
             self.store.update_topic(
                 topic.id,
@@ -203,7 +205,7 @@ class IngestionService:
             self._set_progress(topic.id, 82, "Building graph")
             graph_path = self._build_graph_with_diagnostics(topic_dir, source_dir)
             self._set_progress(topic.id, 96, "Finalizing graph", graph_path=str(graph_path))
-            return self.store.update_topic(
+            updated = self.store.update_topic(
                 topic.id,
                 status="ready",
                 progress_percent=100,
@@ -211,6 +213,8 @@ class IngestionService:
                 graph_path=str(graph_path),
                 last_error=None,
             )
+            self.store.delete_threads_by_title(topic.id, "Topic chat")
+            return updated
         except Exception as exc:
             self.store.update_topic(
                 topic.id,

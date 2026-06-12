@@ -14,6 +14,8 @@ from .graphify_client import GraphifyClient
 from .github_collector import GitHubRepositoryCollector
 from .ingestion import IngestionService
 from .models import (
+    AgentTopicDraft,
+    AgentTopicDraftRequest,
     ChatMessage,
     ChatThread,
     IngestRequest,
@@ -35,7 +37,6 @@ app = FastAPI(title="QA Agent", version="0.1.0")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
 
 def _resolve_topic_graph_path(topic: Topic, topics_dir: Path) -> Path | None:
     topic_dir = topics_dir / topic.id
@@ -105,11 +106,16 @@ def default_llm_settings(settings: Settings) -> LlmSettings:
     )
 
 
+def effective_llm_settings(settings: Settings, store: TopicStore) -> LlmSettings:
+    defaults = default_llm_settings(settings)
+    return store.get_llm_settings(defaults)
+
+
 def get_agent(
     settings: Settings = Depends(get_settings),
     store: TopicStore = Depends(get_store),
 ) -> QaAgent:
-    llm = store.get_llm_settings(default_llm_settings(settings))
+    llm = effective_llm_settings(settings, store)
     return QaAgent(
         llm.provider,
         local_base_url=llm.local_base_url,
@@ -143,7 +149,12 @@ def get_llm_settings(
     settings: Settings = Depends(get_settings),
     store: TopicStore = Depends(get_store),
 ) -> LlmSettings:
-    return store.get_llm_settings(default_llm_settings(settings))
+    return effective_llm_settings(settings, store)
+
+
+@app.get("/api/llm-settings/defaults", response_model=LlmSettings)
+def get_default_llm_settings(settings: Settings = Depends(get_settings)) -> LlmSettings:
+    return default_llm_settings(settings)
 
 
 @app.put("/api/llm-settings", response_model=LlmSettings)
@@ -154,6 +165,15 @@ def update_llm_settings(payload: LlmSettings, store: TopicStore = Depends(get_st
 @app.post("/api/topics", response_model=Topic)
 def create_topic(payload: TopicCreate, store: TopicStore = Depends(get_store)) -> Topic:
     return store.create_topic(payload)
+
+
+@app.post("/api/agent/topic-draft", response_model=AgentTopicDraft)
+def create_agent_topic_draft(
+    payload: AgentTopicDraftRequest,
+    agent: QaAgent = Depends(get_agent),
+) -> AgentTopicDraft:
+    name, sources = agent.draft_topic(payload.message)
+    return AgentTopicDraft(name=name, sources=sources)
 
 
 @app.get("/api/threads", response_model=list[ChatThread])
@@ -175,6 +195,14 @@ def create_thread(topic_id: str, payload: ThreadCreate, store: TopicStore = Depe
         return store.create_thread(topic_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Topic not found") from exc
+
+
+@app.delete("/api/threads/{thread_id}", status_code=204)
+def delete_thread(thread_id: str, store: TopicStore = Depends(get_store)) -> None:
+    try:
+        store.delete_thread(thread_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Thread not found") from exc
 
 
 @app.post("/api/threads/{thread_id}/messages", response_model=ThreadMessageResponse)

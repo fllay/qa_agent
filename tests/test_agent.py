@@ -104,6 +104,53 @@ def test_local_fallback_cleans_badge_heavy_repo_summary():
     assert "full l1/2/3 stack" in answer.lower()
 
 
+def test_broad_repo_question_passes_clean_context_to_llm(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return "LLM processed the graph context."
+
+    monkeypatch.setattr(QaAgent, "_generate_with_openai_compatible", staticmethod(fake_generate))
+    graph = Graph()
+    graph.add_node(
+        "repo::acmenet",
+        label="acmenet",
+        type="repository",
+        path=str(tmp_path / "source" / "acmenet"),
+        summary=(
+            "Repository snapshot with 5702 files. Key files: CMakeLists.txt, README.md. "
+            "AcmeNet is an open-source network control project designed for production deployment. "
+            "It provides topology discovery, policy validation, and runtime configuration for distributed network services."
+        ),
+    )
+    graph.add_node(
+        "file::acmenet::CMakeLists.txt",
+        label="CMakeLists.txt",
+        type="config",
+        path=str(tmp_path / "source" / "acmenet" / "CMakeLists.txt"),
+        summary='This is bad practice.") endif (${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})',
+    )
+    graph.add_edge("repo::acmenet", "file::acmenet::CMakeLists.txt")
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(json_graph.node_link_data(graph)), encoding="utf-8")
+    topic = Topic(
+        id="topic-1",
+        name="Topic",
+        status="ready",
+        graph_path=str(graph_path),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    answer = QaAgent().answer(topic, "what is this project do").answer
+
+    assert answer == "LLM processed the graph context."
+    assert captured["question"] == "what is this project do"
+    assert any(item.startswith("repo::acmenet") for item in captured["context_items"])
+    assert all("This is bad practice" not in item for item in captured["context_items"])
+
+
 def test_openrouter_requires_three_models():
     agent = QaAgent(
         "openrouter",

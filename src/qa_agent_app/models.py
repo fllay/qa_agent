@@ -24,6 +24,7 @@ class Topic(BaseModel):
 class TopicCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = ""
+    initial_thread_title: str = Field(default="New chat", min_length=1, max_length=120)
 
 
 class ChatThread(BaseModel):
@@ -49,6 +50,15 @@ class ThreadCreate(BaseModel):
 class ThreadMessageCreate(BaseModel):
     text: str = Field(min_length=1)
     max_context_items: int = Field(default=8, ge=1, le=30)
+
+
+class AgentTopicDraftRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class AgentTopicDraft(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    sources: list[str] = Field(default_factory=list)
 
 
 class IngestRequest(BaseModel):

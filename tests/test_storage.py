@@ -29,6 +29,16 @@ def test_topic_lifecycle(tmp_path):
     assert store.list_topics() == []
 
 
+def test_topic_can_set_initial_thread_title(tmp_path):
+    store = TopicStore(tmp_path / "qa.sqlite")
+    topic = store.create_topic(TopicCreate(name="Repo", initial_thread_title="Topic chat"))
+
+    default_threads = store.list_threads(topic.id)
+
+    assert len(default_threads) == 1
+    assert default_threads[0].title == "Topic chat"
+
+
 def test_thread_lifecycle(tmp_path):
     store = TopicStore(tmp_path / "qa.sqlite")
     topic = store.create_topic(TopicCreate(name="Project"))
@@ -37,6 +47,30 @@ def test_thread_lifecycle(tmp_path):
     assert thread.topic_id == topic.id
     assert thread.title == "Install questions"
     assert any(item.id == thread.id for item in store.list_threads(topic.id))
+
+
+def test_delete_thread_removes_it_from_topic(tmp_path):
+    store = TopicStore(tmp_path / "qa.sqlite")
+    topic = store.create_topic(TopicCreate(name="Project"))
+    thread = store.create_thread(topic.id, ThreadCreate(title="Temporary chat"))
+
+    store.delete_thread(thread.id)
+
+    assert all(item.id != thread.id for item in store.list_threads(topic.id))
+    assert len(store.list_threads(topic.id)) == 1
+
+
+def test_delete_threads_by_title_removes_matching_threads(tmp_path):
+    store = TopicStore(tmp_path / "qa.sqlite")
+    topic = store.create_topic(TopicCreate(name="Project", initial_thread_title="Topic chat"))
+    store.create_thread(topic.id, ThreadCreate(title="Topic chat"))
+    store.create_thread(topic.id, ThreadCreate(title="Keep me"))
+
+    deleted = store.delete_threads_by_title(topic.id, "Topic chat")
+
+    titles = [item.title for item in store.list_threads(topic.id)]
+    assert deleted == 2
+    assert titles == ["Keep me"]
 
 
 def test_thread_messages_persist_and_rename(tmp_path):

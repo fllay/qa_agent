@@ -4,6 +4,7 @@ from pathlib import Path
 from qa_agent_app.graph_loader import (
     FALLBACK_PREVIEW_MAX_EDGES,
     FALLBACK_PREVIEW_MAX_NODES,
+    GraphIndex,
     graph_preview_limits,
     load_graph_preview,
 )
@@ -83,3 +84,42 @@ def test_load_graph_preview_balances_large_fallback_graph(tmp_path):
 
 def test_graph_preview_limits_do_not_cap_fallback_graphs():
     assert graph_preview_limits(Path("fallback-graph.json")) == (None, None)
+
+
+def test_graph_search_prioritizes_repo_context_for_broad_project_questions(tmp_path):
+    graph_path = tmp_path / "fallback-graph.json"
+    payload = {
+        "nodes": [
+            {
+                "id": "repo::acmenet",
+                "label": "acmenet",
+                "type": "repository",
+                "path": str(tmp_path / "source" / "acmenet"),
+                "summary": "AcmeNet is a network control project designed for production deployment.",
+            },
+            {
+                "id": "file::acmenet::README.md",
+                "label": "README.md",
+                "type": "document",
+                "path": str(tmp_path / "source" / "acmenet" / "README.md"),
+                "summary": "This project provides a radio access network solution.",
+            },
+            {
+                "id": "file::acmenet::CMakeLists.txt",
+                "label": "CMakeLists.txt",
+                "type": "config",
+                "path": str(tmp_path / "source" / "acmenet" / "CMakeLists.txt"),
+                "summary": 'This is bad practice.") endif (${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})',
+            },
+        ],
+        "edges": [
+            {"source": "repo::acmenet", "target": "file::acmenet::README.md", "relation": "contains"},
+            {"source": "repo::acmenet", "target": "file::acmenet::CMakeLists.txt", "relation": "contains"},
+        ],
+    }
+    graph_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    results = GraphIndex(graph_path).search("what is this project do", limit=3)
+
+    assert [item["id"] for item in results[:2]] == ["repo::acmenet", "file::acmenet::README.md"]
+    assert "file::acmenet::CMakeLists.txt" not in [item["id"] for item in results]

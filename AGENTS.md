@@ -131,3 +131,30 @@
 - Tightened Show graph hover detection in dense areas by choosing the nearest node under the cursor instead of the first overlapping hit target, reducing wrong-node tooltips.
 - Expanded the Show graph hover popup width cap and allowed long labels to wrap, then reverted the later cursor-centering tweak so positioning stays on the simpler mouse-offset behavior.
 - Changed new topic creation so the initial per-topic thread is stored and shown as `New chat` instead of `Agent Chat`, and updated the storage regression test plus frontend thread selection logic to match.
+
+## 2026-06-12
+
+- Fixed the pending assistant loading bubble in chat by rendering it through the normal `message-shell` wrapper and forcing the loader dots to stay in a horizontal inline-flex row instead of stacking vertically.
+- Fixed chat bubble sizing so user messages use the same shell-level max width as assistant messages, avoiding the overly narrow `fit-content` wrapping that made short user prompts break into stacked lines too early.
+- Added the same hover/focus toolbar treatment to user chat bubbles, with `copy` and `edit` actions; edit restores the selected user message text into the composer for modification and resend.
+- Changed user-message edit into an inline editor rendered in the same transcript position as the original user bubble, with `Cancel` and `Use text` actions so edits happen in place before optionally moving the result into the composer.
+- Reworked chat edit/refresh into per-turn local version branches: editing a user turn or refreshing its assistant answer now adds a selectable version for that whole user/assistant pair, with previous/next controls and a shared version count shown in the message toolbars.
+- Rendered assistant chat replies as formatted Markdown instead of raw escaped text, with client-side support for headings, emphasis, lists, code blocks, links, and simple pipe tables plus matching rich-text bubble styles.
+- Polished assistant rich-text rendering by turning literal `<br>` tags into real line breaks, improving table presentation with a rounded container and less cramped columns, and bumping the chat asset versions so the browser refreshes the updated Markdown styles.
+- Fixed broad graph-RAG project questions so repository/README context is prioritized over noisy config/code snippets while still passing the cleaned context through the configured LLM; deterministic repository summaries remain only as the local-provider fallback.
+- Changed effective LLM settings resolution so explicit `.env` or environment variables take precedence over older SQLite-persisted LLM settings, preventing stale `local` provider rows from overriding OpenRouter config.
+- Changed QA Agent chat topic creation so prompts containing source URLs now auto-detect and attach those sources, create the topic immediately, and start indexing without requiring a separate manual source step.
+- Added an agent topic-draft backend path that uses the configured LLM to suggest a concise topic name from the prompt and detected sources, with deterministic URL-based fallback naming when no model is available.
+- Added regression tests for source extraction, URL cleanup, and fallback topic naming, and bumped the chat asset version so browsers load the updated create-topic flow.
+- Changed agent-created topics so the initial selected thread is titled `Topic chat` instead of `New chat`, while manual topic creation and extra threads still keep the `New chat` label.
+- Fixed QA Agent composer state after agent-created topic handoff so the `Sending...` button does not stay stuck on the QA Agent session after the UI switches into the new topic thread.
+- Added thread deletion support and changed agent-created temporary `Topic chat` threads to be removed automatically after indexing completes successfully.
+- Moved temporary `Topic chat` cleanup into the backend ingestion success path as well, so the thread is deleted reliably when indexing finishes even if the frontend misses the client-side cleanup step.
+- Added a top-right gear settings popup on the chat page for switching between `local` and `openrouter` and editing the same model fields used in `.env`.
+- Changed LLM settings precedence so `.env` provides the default provider/model values, while values saved from the settings popup override those defaults for future chat requests, including user-supplied OpenRouter API keys.
+- Added regression coverage for the new LLM settings precedence and bumped the chat asset version so browsers load the new settings UI.
+- Added a real `Default (.env)` provider option in the settings popup, wired to backend default LLM settings, and moved the modal close button to the popup's top-right corner.
+- Restyled the LLM settings popup theme, provider dropdown, and close button so the modal matches the app instead of the browser-default form controls.
+- Rebalanced the LLM settings popup close `x` icon and changed the modal plus inner settings panels to a plain white background, then bumped the chat asset version again so the updated styling replaces cached CSS.
+- Replaced the font-rendered LLM settings close `x` with a drawn cross icon in CSS so the close button stays visually centered across browsers.
+- Applied a small rightward optical offset to the drawn LLM settings close icon so the `x` no longer reads slightly left of center inside the circle.

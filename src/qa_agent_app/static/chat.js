@@ -8,8 +8,11 @@ let settingsTopicId = null;
 let settingsSources = [];
 let settingsFiles = [];
 let currentTopicSources = [];
+let llmDefaultSettings = null;
+let llmSettings = null;
 let isCreatingTopic = false;
 let isUpdatingTopicSources = false;
+let isSavingLlmSettings = false;
 let topicPollTimer = null;
 let activeTopicMenuId = null;
 let activeGraphTopicId = null;
@@ -29,6 +32,7 @@ const els = {
   sidebar: document.querySelector("#thread-history"),
   openSidebar: document.querySelector("#toggle-sidebar-open"),
   closeSidebar: document.querySelector("#toggle-sidebar-close"),
+  openLlmSettings: document.querySelector("#open-llm-settings"),
   agentThread: document.querySelector("#agent-thread"),
   manualTopic: document.querySelector("#manual-topic"),
   topicTree: document.querySelector("#topic-tree"),
@@ -56,6 +60,22 @@ const els = {
   settingsFiles: document.querySelector("#topic-settings-files"),
   settingsSourceList: document.querySelector("#topic-settings-source-list"),
   settingsSubmit: document.querySelector("#topic-settings-submit"),
+  llmSettingsModal: document.querySelector("#llm-settings-modal"),
+  llmSettingsForm: document.querySelector("#llm-settings-form"),
+  closeLlmSettingsModal: document.querySelector("#close-llm-settings"),
+  llmSettingsSubmit: document.querySelector("#llm-settings-submit"),
+  llmProvider: document.querySelector("#llm-provider"),
+  llmDefaultProviderLabel: document.querySelector("#llm-default-provider-label"),
+  localSettingsFields: document.querySelector("#local-settings-fields"),
+  llmLocalBaseUrl: document.querySelector("#llm-local-base-url"),
+  llmLocalApiKey: document.querySelector("#llm-local-api-key"),
+  llmLocalModel: document.querySelector("#llm-local-model"),
+  openrouterSettingsFields: document.querySelector("#openrouter-settings-fields"),
+  llmOpenrouterApiKey: document.querySelector("#llm-openrouter-api-key"),
+  llmOpenrouterBaseUrl: document.querySelector("#llm-openrouter-base-url"),
+  llmOpenrouterMainModel: document.querySelector("#llm-openrouter-main-model"),
+  llmOpenrouterReserveModel1: document.querySelector("#llm-openrouter-reserve-model-1"),
+  llmOpenrouterReserveModel2: document.querySelector("#llm-openrouter-reserve-model-2"),
   graphModal: document.querySelector("#topic-graph-modal"),
   closeGraphModal: document.querySelector("#close-topic-graph"),
   graphTitle: document.querySelector("#topic-graph-title"),
@@ -80,6 +100,10 @@ function getSession(threadId = activeThreadId) {
       messages: [],
       pending: false,
       draft: "",
+      turnBranches: {},
+      editingTurnId: null,
+      editingDraft: "",
+      loadingTurnId: null,
       copiedId: null,
       scrollLocked: false,
       loaded: key === "agent",
@@ -105,6 +129,90 @@ function showToast(message) {
   showToast.timer = window.setTimeout(() => {
     els.toast.hidden = true;
   }, 3600);
+}
+
+function normalizeLlmSettings(payload = {}) {
+  return {
+    provider: payload.provider === "openrouter" ? "openrouter" : "local",
+    local_base_url: payload.local_base_url || "http://127.0.0.1:11434/v1",
+    local_api_key: payload.local_api_key || "local",
+    local_model: payload.local_model || "llama3.1:8b",
+    openrouter_api_key: payload.openrouter_api_key || "",
+    openrouter_base_url: payload.openrouter_base_url || "https://openrouter.ai/api/v1",
+    openrouter_main_model: payload.openrouter_main_model || "openrouter/auto",
+    openrouter_reserve_model_1: payload.openrouter_reserve_model_1 || "openai/gpt-4o-mini",
+    openrouter_reserve_model_2: payload.openrouter_reserve_model_2 || "google/gemini-flash-1.5",
+  };
+}
+
+function sameLlmSettings(left, right) {
+  if (!left || !right) return false;
+  const leftValue = normalizeLlmSettings(left);
+  const rightValue = normalizeLlmSettings(right);
+  return JSON.stringify(leftValue) === JSON.stringify(rightValue);
+}
+
+function labelProvider(provider) {
+  return provider === "openrouter" ? "OpenRouter" : "Local";
+}
+
+function setLlmDefaultLabel(settings) {
+  const providerLabel = labelProvider(normalizeLlmSettings(settings).provider);
+  els.llmDefaultProviderLabel.textContent = `Default (.env): ${providerLabel}`;
+  const defaultOption = els.llmProvider.querySelector('option[value="default"]');
+  if (defaultOption) {
+    defaultOption.textContent = `Default (.env: ${providerLabel})`;
+  }
+}
+
+function applyLlmProviderVisibility(provider) {
+  if (provider === "default" && llmDefaultSettings) {
+    provider = llmDefaultSettings.provider;
+  }
+  const local = provider !== "openrouter";
+  els.localSettingsFields.hidden = !local;
+  els.openrouterSettingsFields.hidden = local;
+}
+
+function populateLlmSettingsForm(settings, providerMode = null) {
+  const next = normalizeLlmSettings(settings);
+  const mode = providerMode || (sameLlmSettings(next, llmDefaultSettings) ? "default" : next.provider);
+  els.llmProvider.value = mode;
+  els.llmLocalBaseUrl.value = next.local_base_url;
+  els.llmLocalApiKey.value = next.local_api_key;
+  els.llmLocalModel.value = next.local_model;
+  els.llmOpenrouterApiKey.value = next.openrouter_api_key;
+  els.llmOpenrouterBaseUrl.value = next.openrouter_base_url;
+  els.llmOpenrouterMainModel.value = next.openrouter_main_model;
+  els.llmOpenrouterReserveModel1.value = next.openrouter_reserve_model_1;
+  els.llmOpenrouterReserveModel2.value = next.openrouter_reserve_model_2;
+  applyLlmProviderVisibility(mode);
+}
+
+function setLlmSettingsBusy(busy, label = "Save settings") {
+  isSavingLlmSettings = busy;
+  els.llmSettingsSubmit.disabled = busy;
+  els.openLlmSettings.disabled = busy;
+  els.llmSettingsSubmit.textContent = label;
+}
+
+async function openLlmSettingsModal() {
+  try {
+    setLlmSettingsBusy(true, "Loading...");
+    const [effectiveSettings, defaultSettings] = await Promise.all([
+      api("/api/llm-settings"),
+      api("/api/llm-settings/defaults"),
+    ]);
+    llmDefaultSettings = normalizeLlmSettings(defaultSettings);
+    llmSettings = normalizeLlmSettings(effectiveSettings);
+    setLlmDefaultLabel(llmDefaultSettings);
+    populateLlmSettingsForm(llmSettings);
+    els.llmSettingsModal.showModal();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    setLlmSettingsBusy(false);
+  }
 }
 
 function setSidebarOpen(open) {
@@ -141,8 +249,8 @@ function isPending() {
   return getSession().pending;
 }
 
-function setPending(pending) {
-  getSession().pending = pending;
+function setPending(pending, threadId = activeThreadId) {
+  getSession(threadId).pending = pending;
   updateComposerState();
   renderMessages();
 }
@@ -322,22 +430,36 @@ function selectAgentChat() {
   renderMessages();
 }
 
-async function createTopic(name, sources = []) {
+async function createTopic(name, sources = [], options = {}) {
   const sourceValues = sources.filter((source) => typeof source === "string");
   const description = sourceValues.join("\n");
+  const initialThreadTitle = options.initialThreadTitle || "New chat";
+  const deleteInitialThreadOnReady = Boolean(options.deleteInitialThreadOnReady);
   const topic = await api("/api/topics", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, description }),
+    body: JSON.stringify({ name, description, initial_thread_title: initialThreadTitle }),
   });
   await loadData();
-  const defaultThread = threads.find((thread) => thread.topic_id === topic.id && thread.title === "New chat");
+  const defaultThread = threads.find(
+    (thread) => thread.topic_id === topic.id && thread.title === initialThreadTitle,
+  );
   await selectThread(topic.id, defaultThread?.id || "agent");
   if (sources.length) {
     markTopicIndexing(topic.id);
-    void runTopicSetup(topic.id, topic.name, sources);
+    void runTopicSetup(topic.id, topic.name, sources, {
+      cleanupThreadId: deleteInitialThreadOnReady ? defaultThread?.id || null : null,
+    });
   }
   return topic;
+}
+
+async function draftAgentTopic(message) {
+  return api("/api/agent/topic-draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
 }
 
 async function createTopicThread(topicId) {
@@ -357,10 +479,23 @@ async function createTopicThread(topicId) {
   }
 }
 
-async function runTopicSetup(topicId, topicName, sources) {
+async function deleteThread(threadId, { silent = false } = {}) {
+  if (!threadId) return;
+  await api(`/api/threads/${threadId}`, { method: "DELETE" });
+  threadSessions.delete(threadId);
+  await loadData();
+  if (!silent) {
+    showToast("Thread deleted.");
+  }
+}
+
+async function runTopicSetup(topicId, topicName, sources, options = {}) {
   try {
     await addSourcesToTopic(topicId, sources);
     await loadData();
+    if (options.cleanupThreadId) {
+      await deleteThread(options.cleanupThreadId, { silent: true });
+    }
     if (activeTopicId === topicId) {
       updateComposerHint(topicId);
     }
@@ -414,17 +549,20 @@ function pushLocalMessage(role, text, extra = {}) {
   scrollMessagesToBottom(true);
 }
 
-async function copyMessage(messageId) {
+async function copyTurnText(turnId, role) {
   const session = getSession();
-  const message = session.messages.find((item) => item.id === messageId);
-  if (!message) return;
+  const branch = session.turnBranches?.[turnId];
+  const version = branch?.versions?.[branch.activeIndex ?? 0];
+  const text = role === "agent" ? version?.agentText : version?.userText;
+  if (!text) return;
+  const copyId = `${turnId}:${role}`;
   try {
-    await navigator.clipboard.writeText(message.text);
-    session.copiedId = messageId;
+    await navigator.clipboard.writeText(text);
+    session.copiedId = copyId;
     renderMessages();
-    window.clearTimeout(copyMessage.timer);
-    copyMessage.timer = window.setTimeout(() => {
-      if (session.copiedId === messageId) {
+    window.clearTimeout(copyTurnText.timer);
+    copyTurnText.timer = window.setTimeout(() => {
+      if (session.copiedId === copyId) {
         session.copiedId = null;
         renderMessages();
       }
@@ -434,31 +572,105 @@ async function copyMessage(messageId) {
   }
 }
 
-async function refreshMessage(messageId) {
-  if (!activeTopicId || activeThreadId === "agent" || isPending()) return;
+function editMessage(turnId) {
+  if (isPending()) return;
   const session = getSession();
-  const target = session.messages.find((item) => item.id === messageId && item.role === "agent");
-  if (!target) return;
-  target.refreshing = true;
+  const branch = session.turnBranches?.[turnId];
+  const version = branch?.versions?.[branch.activeIndex ?? 0];
+  if (!version) return;
+  session.editingTurnId = turnId;
+  session.editingDraft = String(version.userText || "");
+  renderMessages();
+}
+
+function cancelEditMessage() {
+  const session = getSession();
+  session.editingTurnId = null;
+  session.editingDraft = "";
+  renderMessages();
+}
+
+async function commitEditMessage() {
+  if (!activeTopicId || isPending()) return;
+  const session = getSession();
+  if (!session.editingTurnId) return;
+  const nextText = session.editingDraft.trim();
+  if (!nextText) {
+    showToast("Message cannot be empty.");
+    return;
+  }
+  const turnId = session.editingTurnId;
+  const branch = session.turnBranches?.[turnId];
+  if (!branch) return;
+  session.loadingTurnId = turnId;
+  branch.loading = true;
   renderMessages();
   try {
-    const refreshed = await api(`/api/threads/${activeThreadId}/messages/${messageId}/refresh`, {
+    const response = await api(`/api/topics/${activeTopicId}/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: target.text }),
+      body: JSON.stringify({ question: nextText }),
     });
-    const nextTarget = session.messages.find((item) => item.id === messageId);
-    if (nextTarget) {
-      nextTarget.text = refreshed.text;
-      nextTarget.createdAt = refreshed.created_at;
-      nextTarget.refreshing = false;
-    }
+    branch.versions.push({
+      id: `${turnId}:v${branch.versions.length + 1}`,
+      userText: nextText,
+      agentText: response.answer,
+      source: "edit",
+    });
+    branch.activeIndex = branch.versions.length - 1;
+    session.editingTurnId = null;
+    session.editingDraft = "";
   } catch (error) {
-    const nextTarget = session.messages.find((item) => item.id === messageId);
-    if (nextTarget) {
-      nextTarget.refreshing = false;
-    }
     showToast(error.message);
+  } finally {
+    branch.loading = false;
+    session.loadingTurnId = null;
+    renderMessages();
+  }
+}
+
+async function refreshMessage(turnId) {
+  if (!activeTopicId || activeThreadId === "agent" || isPending()) return;
+  const session = getSession();
+  const branch = session.turnBranches?.[turnId];
+  const version = branch?.versions?.[branch.activeIndex ?? 0];
+  if (!branch || !version) return;
+  session.loadingTurnId = turnId;
+  branch.loading = true;
+  renderMessages();
+  try {
+    const response = await api(`/api/topics/${activeTopicId}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: version.userText }),
+    });
+    branch.versions.push({
+      id: `${turnId}:v${branch.versions.length + 1}`,
+      userText: version.userText,
+      agentText: response.answer,
+      source: "refresh",
+    });
+    branch.activeIndex = branch.versions.length - 1;
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    branch.loading = false;
+    session.loadingTurnId = null;
+    renderMessages();
+  }
+}
+
+function stepTurnVersion(turnId, delta) {
+  const session = getSession();
+  const branch = session.turnBranches?.[turnId];
+  if (!branch || branch.versions.length < 2) return;
+  const nextIndex = branch.activeIndex + delta;
+  if (nextIndex < 0 || nextIndex >= branch.versions.length) {
+    return;
+  }
+  branch.activeIndex = nextIndex;
+  if (session.editingTurnId === turnId) {
+    session.editingDraft = branch.versions[nextIndex].userText;
   }
   renderMessages();
 }
@@ -466,6 +678,11 @@ async function refreshMessage(messageId) {
 els.agentThread.addEventListener("click", selectAgentChat);
 els.openSidebar.addEventListener("click", () => setSidebarOpen(true));
 els.closeSidebar.addEventListener("click", () => setSidebarOpen(false));
+els.openLlmSettings.addEventListener("click", () => {
+  if (!isSavingLlmSettings) {
+    void openLlmSettingsModal();
+  }
+});
 
 els.manualTopic.addEventListener("click", () => {
   modalSources = [];
@@ -477,6 +694,7 @@ els.manualTopic.addEventListener("click", () => {
 
 els.closeModal.addEventListener("click", () => els.modal.close());
 els.closeSettingsModal.addEventListener("click", () => els.settingsModal.close());
+els.closeLlmSettingsModal.addEventListener("click", () => els.llmSettingsModal.close());
 els.closeGraphModal.addEventListener("click", () => {
   activeGraphTopicId = null;
   activeGraphScene = null;
@@ -556,26 +774,38 @@ els.chatForm.addEventListener("submit", async (event) => {
 
   if (activeThreadId === "agent") {
     pushLocalMessage("user", text);
-    setPending(true);
-    const topicName = text.length > 80 ? `${text.slice(0, 77)}...` : text;
+    setPending(true, "agent");
     try {
       const agentSession = getSession("agent");
-      const topic = await createTopic(topicName, []);
+      const draft = await draftAgentTopic(text);
+      const topic = await createTopic(draft.name, draft.sources, {
+        initialThreadTitle: "Topic chat",
+        deleteInitialThreadOnReady: true,
+      });
       if (agentSession.messages.at(-1)?.role === "user" && agentSession.messages.at(-1)?.text === text) {
         agentSession.messages.pop();
       }
       const topicSession = getSession(activeThreadId);
       topicSession.messages.push(buildMessage("user", text));
       topicSession.messages.push(
-        buildMessage("agent", `Created topic "${topic.name}". Add sources or use Create topic to upload docs.`),
+        buildMessage(
+          "agent",
+          draft.sources.length
+            ? `Created topic "${topic.name}" and started indexing ${draft.sources.join(", ")}.`
+            : `Created topic "${topic.name}". Add sources or use Create topic to upload docs.`,
+        ),
       );
       renderMessages();
       scrollMessagesToBottom(true);
-      showToast(`Created topic "${topic.name}".`);
+      showToast(
+        draft.sources.length
+          ? `Created topic "${topic.name}". Building graph...`
+          : `Created topic "${topic.name}".`,
+      );
     } catch (error) {
       pushLocalMessage("agent", error.message);
     } finally {
-      setPending(false);
+      setPending(false, "agent");
     }
     return;
   }
@@ -640,6 +870,55 @@ els.settingsForm.addEventListener("submit", async (event) => {
   } finally {
     isUpdatingTopicSources = false;
     setSettingsBusy(false, "Apply sources");
+  }
+});
+
+els.llmProvider.addEventListener("change", () => {
+  if (els.llmProvider.value === "default" && llmDefaultSettings) {
+    populateLlmSettingsForm(llmDefaultSettings, "default");
+    return;
+  }
+  applyLlmProviderVisibility(els.llmProvider.value);
+});
+
+els.llmSettingsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (isSavingLlmSettings) return;
+  const providerValue = els.llmProvider.value;
+  const payload = providerValue === "default" && llmDefaultSettings
+    ? normalizeLlmSettings(llmDefaultSettings)
+    : normalizeLlmSettings({
+    provider: providerValue,
+    local_base_url: els.llmLocalBaseUrl.value.trim(),
+    local_api_key: els.llmLocalApiKey.value.trim(),
+    local_model: els.llmLocalModel.value.trim(),
+    openrouter_api_key: els.llmOpenrouterApiKey.value.trim(),
+    openrouter_base_url: els.llmOpenrouterBaseUrl.value.trim(),
+    openrouter_main_model: els.llmOpenrouterMainModel.value.trim(),
+    openrouter_reserve_model_1: els.llmOpenrouterReserveModel1.value.trim(),
+    openrouter_reserve_model_2: els.llmOpenrouterReserveModel2.value.trim(),
+  });
+
+  try {
+    setLlmSettingsBusy(true, "Saving...");
+    llmSettings = normalizeLlmSettings(
+      await api("/api/llm-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    );
+    populateLlmSettingsForm(llmSettings, providerValue === "default" ? "default" : null);
+    els.llmSettingsModal.close();
+    showToast(
+      providerValue === "default"
+        ? `Model settings reset to the .env default (${labelProvider(llmSettings.provider)}).`
+        : `Model settings saved for ${labelProvider(llmSettings.provider)}.`,
+    );
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    setLlmSettingsBusy(false);
   }
 });
 
@@ -1046,9 +1325,155 @@ function setSettingsBusy(busy, label) {
   els.settingsSubmit.textContent = label;
 }
 
+function ensureTurnBranches(session, messages) {
+  const branches = session.turnBranches || {};
+  for (let index = 0; index < messages.length; index += 1) {
+    const userMessage = messages[index];
+    if (userMessage.role !== "user") {
+      continue;
+    }
+    const agentMessage = messages[index + 1]?.role === "agent" ? messages[index + 1] : null;
+    if (!branches[userMessage.id]) {
+      branches[userMessage.id] = {
+        activeIndex: 0,
+        loading: false,
+        versions: [
+          {
+            id: `${userMessage.id}:v1`,
+            userText: String(userMessage.text || ""),
+            agentText: String(agentMessage?.text || ""),
+            source: "initial",
+          },
+        ],
+      };
+    } else if (!branches[userMessage.id].versions.length) {
+      branches[userMessage.id].versions.push({
+        id: `${userMessage.id}:v1`,
+        userText: String(userMessage.text || ""),
+        agentText: String(agentMessage?.text || ""),
+        source: "initial",
+      });
+    } else if (!branches[userMessage.id].versions[0].agentText && agentMessage?.text) {
+      branches[userMessage.id].versions[0].agentText = String(agentMessage.text || "");
+    }
+    if (agentMessage) {
+      index += 1;
+    }
+  }
+  session.turnBranches = branches;
+}
+
+function buildMessageTurns(messages, session) {
+  ensureTurnBranches(session, messages);
+  const turns = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const userMessage = messages[index];
+    if (userMessage.role !== "user") {
+      continue;
+    }
+    const agentMessage = messages[index + 1]?.role === "agent" ? messages[index + 1] : null;
+    const branch = session.turnBranches[userMessage.id];
+    if (!branch) {
+      continue;
+    }
+    const activeIndex = Math.max(0, Math.min(branch.activeIndex || 0, branch.versions.length - 1));
+    branch.activeIndex = activeIndex;
+    turns.push({
+      id: userMessage.id,
+      baseUserId: userMessage.id,
+      baseAgentId: agentMessage?.id || null,
+      branch,
+      version: branch.versions[activeIndex],
+      activeIndex,
+    });
+    if (agentMessage) {
+      index += 1;
+    }
+  }
+  return turns;
+}
+
+function renderTurnVersionControls(turn, role, session) {
+  const copied = session.copiedId === `${turn.id}:${role}`;
+  const canStepBack = turn.activeIndex > 0;
+  const canStepForward = turn.activeIndex < turn.branch.versions.length - 1;
+  const isUser = role === "user";
+  const canEdit = isUser && !turn.branch.loading;
+  const canRefresh = !isUser && !turn.branch.loading;
+  const countMarkup =
+    turn.branch.versions.length > 1
+      ? `
+        <div class="message-version-switcher" aria-label="Version selector">
+          <button class="message-action-icon" type="button" data-version-step="${turn.id}:-1" aria-label="Previous version" ${canStepBack ? "" : "disabled"}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <span class="message-version-count">${turn.activeIndex + 1}/${turn.branch.versions.length}</span>
+          <button class="message-action-icon" type="button" data-version-step="${turn.id}:1" aria-label="Next version" ${canStepForward ? "" : "disabled"}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 18l6-6-6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      `
+      : "";
+
+  return `
+    <div class="message-actions">
+      ${countMarkup}
+      ${
+        canRefresh
+          ? `
+            <button class="message-action-icon" type="button" data-refresh-id="${turn.id}" aria-label="Refresh" ${turn.branch.loading ? "disabled" : ""}>
+              <svg viewBox="0 0 24 24" aria-hidden="true" class="${turn.branch.loading ? "is-spinning" : ""}">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <path d="M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          `
+          : ""
+      }
+      <button class="message-action-icon" type="button" data-copy-id="${turn.id}:${role}" aria-label="${copied ? "Copied" : "Copy"}">
+        ${
+          copied
+            ? `
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            `
+            : `
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="9" width="10" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+                <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            `
+        }
+      </button>
+      ${
+        canEdit
+          ? `
+            <button class="message-action-icon" type="button" data-edit-id="${turn.id}" aria-label="Edit">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 20h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderAssistantContent(text) {
+  return renderMarkdown(String(text || "").trimEnd());
+}
+
 function renderMessages() {
   const session = getSession();
   const messages = currentMessages();
+  const turns = buildMessageTurns(messages, session);
   els.messages.classList.toggle("is-empty", !messages.length);
   els.messages.classList.toggle("has-messages", messages.length > 0);
   if (!messages.length) {
@@ -1064,46 +1489,45 @@ function renderMessages() {
 
   els.messages.innerHTML = `
     <div class="message-list">
-      ${messages
+      ${turns
         .map(
-          (message) => `
-            <article class="message-row ${message.role}">
-              <div class="message-shell ${message.role}">
-                <div class="message ${message.role}">
-                  <div class="message-body">${escapeHtml(String(message.text || "").trimEnd())}</div>
-                </div>
+          (turn) => `
+            <article class="message-row user">
+              <div class="message-shell user">
                 ${
-                  message.role === "agent"
+                  session.editingTurnId === turn.id
                     ? `
-                      <div class="message-actions">
-                        <button class="message-action-icon" type="button" data-copy-id="${message.id}" aria-label="${session.copiedId === message.id ? "Copied" : "Copy"}">
-                          ${
-                            session.copiedId === message.id
-                              ? `
-                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                  <path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                              `
-                              : `
-                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                  <rect x="9" y="9" width="10" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
-                                  <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                              `
-                          }
-                        </button>
-                        <button class="message-action-icon" type="button" data-refresh-id="${message.id}" aria-label="Refresh">
-                          <svg viewBox="0 0 24 24" aria-hidden="true" class="${message.refreshing ? "is-spinning" : ""}">
-                            <path d="M21 12a9 9 0 1 1-2.64-6.36" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                            <path d="M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                          </svg>
-                        </button>
+                      <div class="message message-editing user">
+                        <textarea class="message-edit-textarea" data-edit-textarea="true" data-edit-id="${turn.id}" aria-label="Edit message">${escapeHtml(session.editingDraft)}</textarea>
+                        <div class="message-edit-actions">
+                          <button class="message-edit-button message-edit-button-secondary" type="button" data-edit-cancel="true">Cancel</button>
+                          <button class="message-edit-button" type="button" data-edit-commit="true" ${turn.branch.loading ? "disabled" : ""}>${turn.branch.loading ? "Working..." : "Use text"}</button>
+                        </div>
                       </div>
                     `
-                    : ""
+                    : `
+                      <div class="message user">
+                        <div class="message-body">${escapeHtml(String(turn.version.userText || "").trimEnd())}</div>
+                      </div>
+                    `
                 }
+                ${session.editingTurnId !== turn.id ? renderTurnVersionControls(turn, "user", session) : ""}
               </div>
             </article>
+            ${
+              turn.version.agentText
+                ? `
+                  <article class="message-row agent">
+                    <div class="message-shell agent">
+                      <div class="message agent">
+                        <div class="message-body message-body-rich">${renderAssistantContent(turn.version.agentText)}</div>
+                      </div>
+                      ${renderTurnVersionControls(turn, "agent", session)}
+                    </div>
+                  </article>
+                `
+                : ""
+            }
           `,
         )
         .join("")}
@@ -1111,10 +1535,12 @@ function renderMessages() {
         session.pending
           ? `
             <article class="message-row agent">
-              <div class="message agent message-loading">
-                <span class="loading-dot"></span>
-                <span class="loading-dot"></span>
-                <span class="loading-dot"></span>
+              <div class="message-shell agent">
+                <div class="message agent message-loading" aria-label="Loading response">
+                  <span class="loading-dot"></span>
+                  <span class="loading-dot"></span>
+                  <span class="loading-dot"></span>
+                </div>
               </div>
             </article>
           `
@@ -1124,10 +1550,47 @@ function renderMessages() {
   `;
 
   els.messages.querySelectorAll("[data-copy-id]").forEach((button) => {
-    button.addEventListener("click", () => copyMessage(button.dataset.copyId));
+    const [turnId, role] = String(button.dataset.copyId || "").split(":");
+    button.addEventListener("click", () => copyTurnText(turnId, role));
   });
   els.messages.querySelectorAll("[data-refresh-id]").forEach((button) => {
     button.addEventListener("click", () => refreshMessage(button.dataset.refreshId));
+  });
+  els.messages.querySelectorAll("[data-edit-id]").forEach((button) => {
+    button.addEventListener("click", () => editMessage(button.dataset.editId));
+  });
+  els.messages.querySelectorAll("[data-version-step]").forEach((button) => {
+    const [turnId, step] = String(button.dataset.versionStep || "").split(":");
+    button.addEventListener("click", () => stepTurnVersion(turnId, Number(step)));
+  });
+  els.messages.querySelectorAll("[data-edit-textarea]").forEach((field) => {
+    field.style.height = "0px";
+    field.style.height = `${Math.max(field.scrollHeight, 72)}px`;
+    field.addEventListener("input", () => {
+      const sessionState = getSession();
+      sessionState.editingDraft = field.value;
+      field.style.height = "0px";
+      field.style.height = `${Math.max(field.scrollHeight, 72)}px`;
+    });
+    field.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        commitEditMessage();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelEditMessage();
+      }
+    });
+    field.focus();
+    const caret = field.value.length;
+    field.setSelectionRange(caret, caret);
+  });
+  els.messages.querySelectorAll("[data-edit-cancel]").forEach((button) => {
+    button.addEventListener("click", () => cancelEditMessage());
+  });
+  els.messages.querySelectorAll("[data-edit-commit]").forEach((button) => {
+    button.addEventListener("click", () => commitEditMessage());
   });
   if (!session.scrollLocked || session.pending) {
     scrollMessagesToBottom(false);
@@ -1928,6 +2391,163 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function renderMarkdown(input) {
+  const lines = String(input || "").replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+
+  for (let index = 0; index < lines.length; ) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    if (trimmed.startsWith("```")) {
+      const fence = trimmed.slice(3).trim();
+      index += 1;
+      const codeLines = [];
+      while (index < lines.length && !lines[index].trim().startsWith("```")) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      blocks.push(
+        `<pre class="md-pre"><code class="md-code-block"${fence ? ` data-lang="${escapeHtml(fence)}"` : ""}>${escapeHtml(codeLines.join("\n"))}</code></pre>`,
+      );
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      blocks.push(`<h${level} class="md-heading md-h${level}">${renderMarkdownInline(headingMatch[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (isMarkdownTable(lines, index)) {
+      const tableLines = [lines[index], lines[index + 1]];
+      index += 2;
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      blocks.push(renderMarkdownTable(tableLines));
+      continue;
+    }
+
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s*[-*+]\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s*[-*+]\s+/, ""));
+        index += 1;
+      }
+      blocks.push(`<ul class="md-list">${items.map((item) => `<li>${renderMarkdownInline(item)}</li>`).join("")}</ul>`);
+      continue;
+    }
+
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s*\d+\.\s+/, ""));
+        index += 1;
+      }
+      blocks.push(`<ol class="md-list md-list-ordered">${items.map((item) => `<li>${renderMarkdownInline(item)}</li>`).join("")}</ol>`);
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (index < lines.length) {
+      const next = lines[index];
+      const nextTrimmed = next.trim();
+      if (
+        !nextTrimmed ||
+        nextTrimmed.startsWith("```") ||
+        /^(#{1,6})\s+/.test(nextTrimmed) ||
+        /^\s*[-*+]\s+/.test(next) ||
+        /^\s*\d+\.\s+/.test(next) ||
+        isMarkdownTable(lines, index)
+      ) {
+        break;
+      }
+      paragraphLines.push(nextTrimmed);
+      index += 1;
+    }
+    blocks.push(`<p>${renderMarkdownInline(paragraphLines.join(" "))}</p>`);
+  }
+
+  return blocks.join("");
+}
+
+function renderMarkdownInline(text) {
+  const placeholders = [];
+  let safe = escapeHtml(text);
+
+  safe = safe.replace(/&lt;br\s*\/?&gt;/gi, "<br>");
+
+  safe = safe.replace(/`([^`]+)`/g, (_, code) => {
+    const token = `__MD_TOKEN_${placeholders.length}__`;
+    placeholders.push(`<code class="md-inline-code">${escapeHtml(code)}</code>`);
+    return token;
+  });
+
+  safe = safe.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label, url) => {
+    const token = `__MD_TOKEN_${placeholders.length}__`;
+    placeholders.push(
+      `<a class="md-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${renderMarkdownInline(label)}</a>`,
+    );
+    return token;
+  });
+
+  safe = safe.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  safe = safe.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  safe = safe.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
+  safe = safe.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
+
+  placeholders.forEach((value, index) => {
+    safe = safe.replaceAll(`__MD_TOKEN_${index}__`, value);
+  });
+  return safe;
+}
+
+function isMarkdownTable(lines, index) {
+  if (index + 1 >= lines.length) {
+    return false;
+  }
+  const header = lines[index].trim();
+  const separator = lines[index + 1].trim();
+  return header.includes("|") && /^[\s|:-]+$/.test(separator) && separator.includes("|");
+}
+
+function renderMarkdownTable(lines) {
+  const parseRow = (line) =>
+    line
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.trim());
+
+  const headers = parseRow(lines[0]);
+  const rows = lines.slice(2).map(parseRow);
+  return `
+    <div class="md-table-wrap">
+      <table class="md-table">
+        <thead><tr>${headers.map((cell) => `<th>${renderMarkdownInline(cell)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${rows
+            .map((row) => `<tr>${row.map((cell) => `<td>${renderMarkdownInline(cell)}</td>`).join("")}</tr>`)
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 loadData()

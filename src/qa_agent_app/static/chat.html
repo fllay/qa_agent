@@ -4,11 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QA Agent</title>
-    <link rel="stylesheet" href="/static/chat.css?v=20260611-graphmodal18" />
+    <link rel="stylesheet" href="/static/chat.css?v=20260612-llmsettings3" />
   </head>
   <body>
     <main class="chat-shell">
       <button id="toggle-sidebar-open" class="sidebar-toggle sidebar-toggle-open" type="button" aria-label="Open thread history">☰</button>
+      <button id="open-llm-settings" class="global-settings-button" type="button" aria-label="Open model settings">⚙</button>
       <aside id="thread-history" class="thread-history" aria-label="Thread History">
         <div class="sidebar-top">
           <button id="toggle-sidebar-close" class="icon-button" type="button" aria-label="Close thread history">☰</button>
@@ -90,6 +91,64 @@
       </form>
     </dialog>
 
+    <dialog id="llm-settings-modal" class="topic-modal llm-settings-modal">
+      <form id="llm-settings-form" method="dialog">
+        <button id="close-llm-settings" class="modal-close-button" type="button" aria-label="Close model settings">×</button>
+        <div class="modal-head llm-settings-head">
+          <h2>Model settings</h2>
+        </div>
+        <label>
+          Provider
+          <select id="llm-provider" class="settings-select">
+            <option value="default">Default (.env)</option>
+            <option value="local">Local</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+        </label>
+
+        <section id="local-settings-fields" class="settings-field-group">
+          <label>
+            Local base URL
+            <input id="llm-local-base-url" placeholder="http://127.0.0.1:11434/v1" />
+          </label>
+          <label>
+            Local API key
+            <input id="llm-local-api-key" placeholder="local" />
+          </label>
+          <label>
+            Local model
+            <input id="llm-local-model" placeholder="llama3.1:8b" />
+          </label>
+        </section>
+
+        <section id="openrouter-settings-fields" class="settings-field-group">
+          <label>
+            OpenRouter API key
+            <input id="llm-openrouter-api-key" type="password" placeholder="sk-or-..." />
+          </label>
+          <label>
+            OpenRouter base URL
+            <input id="llm-openrouter-base-url" placeholder="https://openrouter.ai/api/v1" />
+          </label>
+          <label>
+            Main model
+            <input id="llm-openrouter-main-model" placeholder="openrouter/auto" />
+          </label>
+          <label>
+            Reserve model 1
+            <input id="llm-openrouter-reserve-model-1" placeholder="openai/gpt-4o-mini" />
+          </label>
+          <label>
+            Reserve model 2
+            <input id="llm-openrouter-reserve-model-2" placeholder="google/gemini-flash-1.5" />
+          </label>
+        </section>
+
+        <p class="settings-note"><strong id="llm-default-provider-label">Default (.env)</strong> comes from <code>.env</code>. Picking Local or OpenRouter saves a user override for future chat requests.</p>
+        <button id="llm-settings-submit" class="modal-submit" type="submit">Save settings</button>
+      </form>
+    </dialog>
+
     <dialog id="topic-graph-modal" class="topic-modal graph-modal">
       <div class="graph-modal-layout">
         <div class="modal-head">
@@ -132,6 +191,6 @@
     </dialog>
 
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/chat.js?v=20260611-graphmodal19"></script>
+    <script src="/static/chat.js?v=20260612-llmsettings3"></script>
   </body>
 </html>

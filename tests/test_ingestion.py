@@ -57,6 +57,21 @@ def test_ingestion_appends_sources(tmp_path):
     assert (tmp_path / "topics" / topic.id / "graph.json").exists()
 
 
+def test_ingestion_ready_cleanup_removes_temporary_topic_chat_thread(tmp_path):
+    store = TopicStore(tmp_path / "qa.sqlite")
+    topic = store.create_topic(TopicCreate(name="Docs", initial_thread_title="Topic chat"))
+    service = IngestionService(tmp_path / "topics", store, DummyGraphifyClient(), DummyGitHubCollector())
+
+    local_source = tmp_path / "repo"
+    local_source.mkdir()
+    (local_source / "README.md").write_text("hello", encoding="utf-8")
+
+    updated = service.ingest(topic, IngestRequest(kind="local_path", value=str(local_source)))
+
+    assert updated.status == "ready"
+    assert store.list_threads(topic.id) == []
+
+
 def test_detect_archived_repo_replacement(tmp_path):
     repo_dir = tmp_path / "topics" / "topic" / "source" / "srsran-project"
     repo_dir.mkdir(parents=True)
