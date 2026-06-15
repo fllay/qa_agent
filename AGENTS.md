@@ -8,6 +8,15 @@
 
 # Change Log
 
+## 2026-06-15
+
+- Investigated the server-side graph popup failure on `192.168.168.98` and confirmed the deployed topic graph API was returning HTTP `200` with a very large Graphify payload (`63817` nodes, `195801` edges), so the browser bottleneck was client-side graph layout/render cost rather than graph loading.
+- Kept full Graphify graph payloads enabled in the backend and reworked the graph viewer's large-graph render path to avoid the most expensive force-relaxation and overlap-separation passes for very large graphs, fit the initial viewport to full graph bounds, and cull off-screen nodes plus many off-screen/low-zoom edges during canvas redraws.
+- Added a cache-busting `chat.js`/`chat.css` version bump for the updated full-graph viewer and redeployed the Dockerized app on `192.168.168.98`, rebuilding the `qa_agent-qa-agent` image and restarting `qa_agent-qa-agent-1` with the full graph payload path still active.
+- Corrected the full-graph viewer after the first large-graph render was visually too heavy: kept the full payload, reduced large-graph node radii and opacity, rendered overview edges as faint hairlines, spread large communities with deterministic lightweight placement, and made zoom bounds preserve the full-graph overview instead of jumping into the dense center.
+- Optimized the Dockerfile for faster rebuilds by installing Python dependencies and `graphifyy` before copying `src/`, enabling a BuildKit pip cache mount, importing the app through `PYTHONPATH=/app/src`, and avoiding a source-dependent `pip install .` layer on every frontend/backend edit.
+- Fixed the next full-graph popup regression by removing upfront allocation of large edge render objects, keeping large-graph edges hidden until the user zooms in enough for them to matter, tightening the overview placement curve so reset/open no longer collapses into a tiny unreadable cloud, and redeploying the updated frontend to `192.168.168.98`.
+
 ## 2026-06-08
 
 - Created a FastAPI web app scaffold for a topic-managed Graph RAG Q&A agent.

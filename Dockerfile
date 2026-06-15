@@ -1,10 +1,12 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.12-slim
 
 ARG GRAPHIFYY_VERSION=0.8.38
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app/src \
     QA_AGENT_DATA_DIR=/app/data \
     QA_AGENT_DATABASE_PATH=/app/data/qa_agent.sqlite \
     GRAPHIFY_BIN=graphify
@@ -18,16 +20,17 @@ RUN apt-get update \
         gosu \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt pyproject.toml README.md ./
-COPY src ./src
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY requirements.txt ./
 
-RUN pip install --upgrade pip \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip \
     && pip install -r requirements.txt \
-    && pip install "graphifyy==${GRAPHIFYY_VERSION}" \
-    && pip install .
+    && pip install "graphifyy==${GRAPHIFYY_VERSION}"
 
 RUN graphify --version
+
+COPY src ./src
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/data \

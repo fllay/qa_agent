@@ -24,6 +24,10 @@ let graphWindowListenersBound = false;
 const graphDragState = { dragging: false, startX: 0, startY: 0 };
 const GRAPH_VIEWBOX = { width: 1320, height: 720 };
 const GRAPH_NODE_LIST_LIMIT = 120;
+const LARGE_GRAPH_LAYOUT_THRESHOLD = 9000;
+const LARGE_GRAPH_NODE_PICK_THRESHOLD = 12000;
+const LARGE_GRAPH_EDGE_VISIBILITY_SCALE = 0.085;
+const LARGE_GRAPH_LABEL_VISIBILITY_SCALE = 0.22;
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -1164,7 +1168,9 @@ async function openTopicGraph(topicId) {
 function renderTopicGraph(payload) {
   const graphModel = buildGraphModel(payload);
   els.graphTitle.textContent = `Topic graph: ${payload.topic_name}`;
-  els.graphSubtitle.textContent = "Showing the full topic graph with clustered communities.";
+  els.graphSubtitle.textContent = payload.sampled
+    ? "Showing a sampled preview of the saved graph for faster rendering."
+    : "Showing the full topic graph with clustered communities.";
   els.graphNodeCount.textContent = String(payload.total_nodes);
   els.graphEdgeCount.textContent = String(payload.total_edges);
   els.graphKind.textContent = payload.graph_kind === "fallback" ? "Fallback graph" : "Graphify graph";
@@ -1210,6 +1216,7 @@ function renderGraphStage(payload, graphModel) {
   const { width, height } = GRAPH_VIEWBOX;
   const positions = new Map();
   const nodes = graphModel.nodes;
+  const largeGraphMode = graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD;
   if (!nodes.length) {
     activeGraphScene = null;
     els.graphStage.innerHTML = `<div class="graph-stage-empty">This graph does not contain previewable nodes.</div>`;
@@ -1223,10 +1230,14 @@ function renderGraphStage(payload, graphModel) {
     placeClusterNodes(group, positions);
   });
 
-  relaxGraphPositions(nodes, payload.edges || [], positions, graphModel.nodeMap, groups, width, height);
-  separateOverlappingGraphNodes(nodes, positions);
-  normalizeGraphPositions(groups, positions, width, height);
-  separateOverlappingGraphNodes(nodes, positions);
+  if (largeGraphMode) {
+    spreadLargeGraphPositions(nodes, positions, groups);
+  } else {
+    relaxGraphPositions(nodes, payload.edges || [], positions, graphModel.nodeMap, groups, width, height);
+    separateOverlappingGraphNodes(nodes, positions);
+    normalizeGraphPositions(groups, positions, width, height);
+    separateOverlappingGraphNodes(nodes, positions);
+  }
   els.graphStage.innerHTML = `
     <div class="graph-toolbar">
       <button type="button" class="graph-tool-button" data-graph-zoom="out" aria-label="Zoom out">-</button>
@@ -1246,38 +1257,41 @@ function renderGraphStage(payload, graphModel) {
       y: positions.get(node.id).y,
       radius: node.radius,
     }));
-  const drawEdges = (payload.edges || [])
-    .filter(
-      (edge) =>
-        positions.has(edge.source) &&
-        positions.has(edge.target) &&
-        graphModel.nodeMap.has(edge.source) &&
-        graphModel.nodeMap.has(edge.target),
-    )
-    .map((edge) => {
-      const sourceNode = graphModel.nodeMap.get(edge.source);
-      const targetNode = graphModel.nodeMap.get(edge.target);
-      const sameFamily = sourceNode.family === targetNode.family;
-      const touchesRepository = sourceNode.family === "repository" || targetNode.family === "repository";
-      return {
-        source: positions.get(edge.source),
-        target: positions.get(edge.target),
-        color: sameFamily ? "rgba(115, 126, 145, 0.26)" : "rgba(112, 124, 145, 0.18)",
-        width: touchesRepository ? 0.55 : sameFamily ? 1.05 : 0.8,
-        opacity: touchesRepository ? 0.38 : 0.7,
-      };
-    });
   const sceneNodes = nodes.map((node) => ({ ...node, x: positions.get(node.id).x, y: positions.get(node.id).y }));
+  const sceneNodeById = new Map(sceneNodes.map((node) => [node.id, node]));
+  const drawEdges = largeGraphMode
+    ? []
+    : (payload.edges || [])
+        .filter((edge) => sceneNodeById.has(edge.source) && sceneNodeById.has(edge.target))
+        .map((edge) => {
+          const sourceNode = sceneNodeById.get(edge.source);
+          const targetNode = sceneNodeById.get(edge.target);
+          const sameFamily = sourceNode.family === targetNode.family;
+          const touchesRepository = sourceNode.family === "repository" || targetNode.family === "repository";
+          return {
+            source: sourceNode,
+            target: targetNode,
+            color: sameFamily ? "rgba(115, 126, 145, 0.26)" : "rgba(112, 124, 145, 0.18)",
+            width: touchesRepository ? 0.55 : sameFamily ? 1.05 : 0.8,
+            opacity: touchesRepository ? 0.38 : 0.7,
+          };
+        });
   activeGraphScene = {
     width,
     height,
     nodes: sceneNodes,
-    nodeById: new Map(sceneNodes.map((node) => [node.id, node])),
+    nodeById: sceneNodeById,
     edges: drawEdges,
+    rawEdges: largeGraphMode ? payload.edges || [] : [],
     labels: labelNodes,
+    totalNodes: graphModel.totalNodes,
+    totalEdges: largeGraphMode ? (payload.edges || []).length : drawEdges.length,
+    largeGraphMode,
+    bounds: graphViewportBounds(sceneNodes),
+    minScale: null,
     hoverNodeId: null,
   };
-  resetGraphViewport(width, height);
+  resetGraphViewport(width, height, activeGraphScene.bounds);
   scheduleGraphRedraw();
   wireGraphZoom();
   wireGraphTooltip();
@@ -1740,6 +1754,9 @@ function shouldShowGraphNodeLabel(node, totalNodes = 0) {
   if (node.family === "repository") {
     return true;
   }
+  if (totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD) {
+    return node.degree >= 200 && node.rankInGroup < 3;
+  }
   if (totalNodes > 3200) {
     return node.degree >= 24 && node.rankInGroup < 2;
   }
@@ -1757,11 +1774,29 @@ function shouldShowGraphNodeLabel(node, totalNodes = 0) {
 
 function buildGraphModel(payload) {
   const totalNodes = Math.max((payload.nodes || []).length, 1);
-  const layoutScale = Math.max(0.72, Math.min(1.08, 15 / Math.sqrt(totalNodes)));
+  const largeGraphMode = totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD;
+  const layoutScale = largeGraphMode ? Math.max(0.18, Math.min(0.42, 78 / Math.sqrt(totalNodes))) : Math.max(0.72, Math.min(1.08, 15 / Math.sqrt(totalNodes)));
   const nodes = (payload.nodes || []).map((node) => {
     const family = graphFamily(node.kind || node.label || "");
     const color = graphFamilyColor(family);
     const degree = Number(node.degree || 0);
+    const radius = largeGraphMode
+      ? Math.max(
+          family === "repository" ? 4.2 : 0.72,
+          Math.min(
+            family === "repository" ? 8.4 : degree >= 12 ? 2.6 : 1.8,
+            (family === "repository" ? 4.8 + Math.sqrt(degree + 1) * 0.42 : 0.82 + Math.sqrt(degree + 1) * 0.16) *
+              layoutScale,
+          ),
+        )
+      : Math.max(
+          family === "document" || family === "config" ? 4.2 : 5.2,
+          Math.min(
+            family === "repository" ? 17 : family === "document" || family === "config" ? 10.8 : 13.2,
+            (family === "repository" ? 10.8 + Math.sqrt(degree + 1) * 1.85 : 5.2 + Math.sqrt(degree + 1) * 1.55) *
+              layoutScale,
+          ),
+        );
     return {
       ...node,
       degree,
@@ -1769,15 +1804,9 @@ function buildGraphModel(payload) {
       familyLabel: graphFamilyLabel(family),
       color,
       strokeColor: "#11141b",
-      strokeWidth: degree >= 10 ? 1.6 : 1.05,
-      radius: Math.max(
-        family === "document" || family === "config" ? 4.2 : 5.2,
-        Math.min(
-          family === "repository" ? 17 : family === "document" || family === "config" ? 10.8 : 13.2,
-          (family === "repository" ? 10.8 + Math.sqrt(degree + 1) * 1.85 : 5.2 + Math.sqrt(degree + 1) * 1.55) *
-            layoutScale,
-        ),
-      ),
+      strokeWidth: largeGraphMode ? 0.35 : degree >= 10 ? 1.6 : 1.05,
+      opacity: largeGraphMode ? (family === "repository" ? 0.88 : degree >= 10 ? 0.62 : 0.46) : 1,
+      radius,
     };
   });
 
@@ -1800,11 +1829,26 @@ function buildGraphModel(payload) {
       group.nodes.forEach((node, index) => {
         node.rankInGroup = index;
       });
+      const isLargeGroup = group.nodes.length > LARGE_GRAPH_LAYOUT_THRESHOLD / 2;
       group.spreadScale = Math.max(
         1,
         Math.min(
-          group.family === "document" || group.family === "config" ? 7.4 : 5.6,
-          1 + Math.sqrt(group.nodes.length) / (group.family === "document" || group.family === "config" ? 3.35 : 4.8),
+          isLargeGroup
+            ? group.family === "document" || group.family === "config"
+              ? 17.5
+              : 13.5
+            : group.family === "document" || group.family === "config"
+              ? 7.4
+              : 5.6,
+          1 +
+            Math.sqrt(group.nodes.length) /
+              (isLargeGroup
+                ? group.family === "document" || group.family === "config"
+                  ? 1.85
+                  : 2.45
+                : group.family === "document" || group.family === "config"
+                  ? 3.35
+                  : 4.8),
         ),
       );
       return group;
@@ -1876,6 +1920,41 @@ function normalizeGraphPositions(groups, positions, width, height) {
     group.cx = group.cx * scale + offsetX;
     group.cy = group.cy * scale + offsetY;
   });
+}
+
+function spreadLargeGraphPositions(nodes, positions, groups) {
+  const groupMap = new Map(groups.map((group) => [group.family, group]));
+  for (const node of nodes) {
+    const point = positions.get(node.id);
+    const group = groupMap.get(node.family);
+    if (!point || !group || node.family === "repository") {
+      continue;
+    }
+    const rank = node.rankInGroup || 0;
+    const jitter = hashStringUnit(node.id);
+    const angle = rank * 2.399963229728653 + jitter * 0.9;
+    const familySpread =
+      node.family === "document" || node.family === "config" ? 11.2 : node.family === "code" ? 9.8 : 8.1;
+    const shell = Math.pow(rank + 1, 0.42) * familySpread;
+    const lobe = 0.74 + hashStringUnit(`${node.id}:lobe`) * 0.62;
+    const skew = node.family === "code" ? 0.8 : 0.9;
+    point.x = group.cx + Math.cos(angle) * shell * lobe;
+    point.y = group.cy + Math.sin(angle) * shell * skew + (hashStringUnit(`${node.id}:ly`) - 0.5) * 10;
+    positions.set(node.id, point);
+  }
+}
+
+function graphViewportBounds(nodes) {
+  const points = nodes.filter((node) => Number.isFinite(node.x) && Number.isFinite(node.y));
+  if (!points.length) {
+    return null;
+  }
+  return {
+    minX: Math.min(...points.map((node) => node.x - node.radius)),
+    maxX: Math.max(...points.map((node) => node.x + node.radius)),
+    minY: Math.min(...points.map((node) => node.y - node.radius)),
+    maxY: Math.max(...points.map((node) => node.y + node.radius)),
+  };
 }
 
 function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, height) {
@@ -2121,7 +2200,23 @@ function wireGraphTooltip() {
   });
 }
 
-function resetGraphViewport(width = GRAPH_VIEWBOX.width, height = GRAPH_VIEWBOX.height) {
+function resetGraphViewport(width = GRAPH_VIEWBOX.width, height = GRAPH_VIEWBOX.height, bounds = activeGraphScene?.bounds || null) {
+  if (bounds) {
+    const padding = 44;
+    const spanX = Math.max(bounds.maxX - bounds.minX, 1);
+    const spanY = Math.max(bounds.maxY - bounds.minY, 1);
+    const fittedScale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY, 1);
+    const scale = Math.max(fittedScale, activeGraphScene?.largeGraphMode ? 0.07 : 0.025);
+    if (activeGraphScene) {
+      activeGraphScene.minScale = Math.max(scale * 0.82, activeGraphScene.largeGraphMode ? 0.055 : 0.018);
+    }
+    activeGraphView = {
+      scale,
+      offsetX: width / 2 - ((bounds.minX + bounds.maxX) / 2) * scale,
+      offsetY: height / 2 - ((bounds.minY + bounds.maxY) / 2) * scale,
+    };
+    return;
+  }
   activeGraphView = {
     scale: 1,
     offsetX: width * 0.02,
@@ -2134,7 +2229,9 @@ function updateGraphViewport() {
 }
 
 function adjustGraphZoom(factor, centerX, centerY) {
-  const nextScale = Math.max(0.55, Math.min(2.8, activeGraphView.scale * factor));
+  const minScale = activeGraphScene?.minScale || 0.55;
+  const maxScale = activeGraphScene?.largeGraphMode ? 6.5 : 2.8;
+  const nextScale = Math.max(minScale, Math.min(maxScale, activeGraphView.scale * factor));
   const appliedFactor = nextScale / activeGraphView.scale;
   activeGraphView.offsetX = centerX - (centerX - activeGraphView.offsetX) * appliedFactor;
   activeGraphView.offsetY = centerY - (centerY - activeGraphView.offsetY) * appliedFactor;
@@ -2240,17 +2337,57 @@ function drawGraphScene() {
   const scale = activeGraphView.scale;
   const radiusScale = graphNodeZoomScale(scale);
   const fontScale = Math.max(0.58, Math.min(1, 0.78 + (radiusScale - 0.55) * 0.9));
+  const edgeStride = 1;
+  const drawLargeGraphEdges = !activeGraphScene.largeGraphMode || scale >= LARGE_GRAPH_EDGE_VISIBILITY_SCALE;
+  const viewportPadding = 64;
+  const viewportMinX = -viewportPadding;
+  const viewportMaxX = width + viewportPadding;
+  const viewportMinY = -viewportPadding;
+  const viewportMaxY = height + viewportPadding;
 
   context.save();
   context.lineCap = "round";
-  for (const edge of activeGraphScene.edges) {
-    context.beginPath();
-    context.moveTo(edge.source.x * scale + activeGraphView.offsetX, edge.source.y * scale + activeGraphView.offsetY);
-    context.lineTo(edge.target.x * scale + activeGraphView.offsetX, edge.target.y * scale + activeGraphView.offsetY);
-    context.strokeStyle = edge.color;
-    context.globalAlpha = edge.opacity;
-    context.lineWidth = Math.max(0.4, edge.width * Math.max(0.5, Math.min(scale, 1.1)));
-    context.stroke();
+  if (drawLargeGraphEdges) {
+    const edgeSource = activeGraphScene.largeGraphMode ? activeGraphScene.rawEdges : activeGraphScene.edges;
+    for (let index = 0; index < edgeSource.length; index += edgeStride) {
+      const edge = edgeSource[index];
+      const sourceNode = activeGraphScene.largeGraphMode ? activeGraphScene.nodeById.get(edge.source) : edge.source;
+      const targetNode = activeGraphScene.largeGraphMode ? activeGraphScene.nodeById.get(edge.target) : edge.target;
+      if (!sourceNode || !targetNode) {
+        continue;
+      }
+      const sourceX = sourceNode.x * scale + activeGraphView.offsetX;
+      const sourceY = sourceNode.y * scale + activeGraphView.offsetY;
+      const targetX = targetNode.x * scale + activeGraphView.offsetX;
+      const targetY = targetNode.y * scale + activeGraphView.offsetY;
+      if (
+        (sourceX < viewportMinX && targetX < viewportMinX) ||
+        (sourceX > viewportMaxX && targetX > viewportMaxX) ||
+        (sourceY < viewportMinY && targetY < viewportMinY) ||
+        (sourceY > viewportMaxY && targetY > viewportMaxY)
+      ) {
+        continue;
+      }
+      let strokeStyle = edge.color;
+      let opacity = edge.opacity;
+      let width = edge.width;
+      if (activeGraphScene.largeGraphMode) {
+        const sameFamily = sourceNode.family === targetNode.family;
+        const touchesRepository = sourceNode.family === "repository" || targetNode.family === "repository";
+        strokeStyle = sameFamily ? "rgba(67, 76, 91, 0.08)" : "rgba(67, 76, 91, 0.055)";
+        opacity = touchesRepository ? 0.22 : 0.12;
+        width = touchesRepository ? 0.24 : 0.14;
+      }
+      context.beginPath();
+      context.moveTo(sourceX, sourceY);
+      context.lineTo(targetX, targetY);
+      context.strokeStyle = strokeStyle;
+      context.globalAlpha = opacity;
+      context.lineWidth = activeGraphScene.largeGraphMode
+        ? Math.max(0.08, width * Math.max(0.45, Math.min(scale, 1.4)))
+        : Math.max(0.4, width * Math.max(0.5, Math.min(scale, 1.1)));
+      context.stroke();
+    }
   }
   context.restore();
 
@@ -2258,18 +2395,35 @@ function drawGraphScene() {
     const screenX = node.x * scale + activeGraphView.offsetX;
     const screenY = node.y * scale + activeGraphView.offsetY;
     const radius = node.radius * radiusScale;
+    if (
+      screenX + radius < viewportMinX ||
+      screenX - radius > viewportMaxX ||
+      screenY + radius < viewportMinY ||
+      screenY - radius > viewportMaxY
+    ) {
+      continue;
+    }
     const hovered = node.id === activeGraphScene.hoverNodeId;
     context.beginPath();
     context.arc(screenX, screenY, hovered ? radius + 1 : radius, 0, Math.PI * 2);
     context.fillStyle = node.color;
+    context.globalAlpha = hovered ? 1 : node.opacity || 1;
     context.fill();
+    context.globalAlpha = 1;
+    if (activeGraphScene.largeGraphMode && !hovered && scale < 0.38) {
+      continue;
+    }
     context.strokeStyle = hovered ? "#0f172a" : node.strokeColor;
     context.lineWidth = hovered ? Math.max(1.4, node.strokeWidth + 0.4) : node.strokeWidth;
     context.stroke();
   }
+  context.globalAlpha = 1;
 
   context.textAlign = "center";
   context.lineJoin = "round";
+  if (activeGraphScene.largeGraphMode && scale < LARGE_GRAPH_LABEL_VISIBILITY_SCALE) {
+    return;
+  }
   for (const label of activeGraphScene.labels) {
     const node = activeGraphScene.nodeById.get(label.id);
     if (!node) {
@@ -2277,6 +2431,9 @@ function drawGraphScene() {
     }
     const x = label.x * scale + activeGraphView.offsetX;
     const y = label.y * scale + activeGraphView.offsetY + (node.radius * radiusScale + 11);
+    if (x < viewportMinX || x > viewportMaxX || y < viewportMinY || y > viewportMaxY) {
+      continue;
+    }
     context.font = `${Math.max(8, Math.round(10 * fontScale))}px Inter, system-ui, sans-serif`;
     context.lineWidth = 4;
     context.strokeStyle = "rgba(255, 255, 255, 0.92)";
@@ -2288,6 +2445,9 @@ function drawGraphScene() {
 
 function findGraphHoverNode(screenX, screenY) {
   if (!activeGraphScene) {
+    return null;
+  }
+  if (activeGraphScene.totalNodes > LARGE_GRAPH_NODE_PICK_THRESHOLD && activeGraphView.scale < 0.22) {
     return null;
   }
   const radiusScale = graphNodeZoomScale(activeGraphView.scale);
