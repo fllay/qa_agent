@@ -59,6 +59,8 @@ Install Graphify separately. The default `GRAPHIFY_BIN=auto` uses `graphify` on 
 GRAPHIFY_BIN=auto
 ```
 
+The app first runs Graphify full extraction. If Graphify reports that document, paper, or image semantic extraction needs an LLM API key and none is available, QA Agent automatically retries Graphify's code-only update mode so repository code can still be indexed. To enable full semantic extraction for documents and rich media, set one of Graphify's provider keys such as `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `MOONSHOT_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `DEEPSEEK_API_KEY`.
+
 The app runs Graphify inside each topic workspace and searches for the newest `graph.json`.
 
 ## GitHub Ingestion

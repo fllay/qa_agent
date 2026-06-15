@@ -183,3 +183,4 @@
 - Updated the Docker build to install the Graphify CLI from the `graphifyy` package with a build-time version argument.
 - Made Docker Graphify installation the default verified path by checking `graphify --version` during image build and clarifying that plain `docker compose up --build` includes Graphify.
 - Added a Docker entrypoint that prepares mounted `/app/data` permissions as root and then drops to `appuser`, fixing server deployments where topic creation failed with `PermissionError` on `/app/data/topics`.
+- Added automatic Graphify no-key fallback from full semantic `extract` to code-only `update --no-cluster --force`, plus Docker Compose passthrough for common Graphify LLM provider API keys.

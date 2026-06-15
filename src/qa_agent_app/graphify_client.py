@@ -28,18 +28,12 @@ class GraphifyClient:
         output_dir.mkdir(parents=True, exist_ok=True)
         command = [self.command, "extract", str(source_dir), "--out", str(topic_dir), "--no-cluster"]
 
-        try:
-            result = subprocess.run(
-                command,
-                cwd=output_dir,
-                text=True,
-                capture_output=True,
-                timeout=self.timeout_seconds,
-                check=False,
+        result = self._run_graphify(command, output_dir)
+        if result.returncode != 0 and self._is_missing_semantic_api_key(result):
+            result = self._run_graphify(
+                [self.command, "update", str(source_dir), "--no-cluster", "--force"],
+                output_dir,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise GraphifyError(f"Graphify timed out after {self.timeout_seconds} seconds.") from exc
-
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
             raise GraphifyError(f"Graphify failed: {detail}")
@@ -49,6 +43,24 @@ class GraphifyClient:
             raise GraphifyError("Graphify completed but no graph.json output was found.")
         self._ensure_graph_has_nodes(graph_path)
         return graph_path
+
+    def _run_graphify(self, command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                command,
+                cwd=cwd,
+                text=True,
+                capture_output=True,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GraphifyError(f"Graphify timed out after {self.timeout_seconds} seconds.") from exc
+
+    @staticmethod
+    def _is_missing_semantic_api_key(result: subprocess.CompletedProcess[str]) -> bool:
+        output = f"{result.stderr}\n{result.stdout}".lower()
+        return "no llm api key found" in output and "semantic extraction" in output
 
     @staticmethod
     def _find_graph_json(*roots: Path) -> Path | None:
