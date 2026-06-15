@@ -59,9 +59,9 @@ class GraphIndex:
         with graph_path.open("r", encoding="utf-8") as file:
             payload = json.load(file)
         if isinstance(payload, dict) and "nodes" in payload and "links" in payload:
-            return json_graph.node_link_graph(payload)
+            return json_graph.node_link_graph(payload, edges="links")
         if isinstance(payload, dict) and "nodes" in payload and "edges" in payload:
-            return json_graph.node_link_graph({**payload, "links": payload["edges"]})
+            return json_graph.node_link_graph(payload, edges="edges")
         raise ValueError("Unsupported graph.json format.")
 
 

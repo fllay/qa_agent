@@ -184,3 +184,4 @@
 - Made Docker Graphify installation the default verified path by checking `graphify --version` during image build and clarifying that plain `docker compose up --build` includes Graphify.
 - Added a Docker entrypoint that prepares mounted `/app/data` permissions as root and then drops to `appuser`, fixing server deployments where topic creation failed with `PermissionError` on `/app/data/topics`.
 - Added automatic Graphify no-key fallback from full semantic `extract` to code-only `update --no-cluster --force`, plus Docker Compose passthrough for common Graphify LLM provider API keys.
+- Fixed graph preview loading for Graphify `links`-based `node_link` JSON under the newer NetworkX runtime by explicitly selecting the edge key when loading saved graphs.

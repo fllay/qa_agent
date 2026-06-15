@@ -39,6 +39,32 @@ def test_load_graph_preview_limits_and_labels(tmp_path):
     assert len(preview.edges) == 1
 
 
+def test_load_graph_preview_accepts_graphify_links_format(tmp_path):
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(
+        json.dumps(
+            {
+                "directed": False,
+                "multigraph": False,
+                "nodes": [
+                    {"id": "file::app.py", "label": "app.py", "type": "code"},
+                    {"id": "func::hello", "label": "hello", "type": "code"},
+                ],
+                "links": [
+                    {"source": "file::app.py", "target": "func::hello", "relation": "contains"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    preview = load_graph_preview("demo-topic", "Demo Topic", graph_path)
+
+    assert preview.total_nodes == 2
+    assert preview.total_edges == 1
+    assert preview.edges[0].source == "file::app.py"
+
+
 def test_load_graph_preview_balances_large_fallback_graph(tmp_path):
     graph_path = tmp_path / "fallback-graph.json"
     nodes = [{"id": "repo", "label": "Repository", "type": "repository"}]
