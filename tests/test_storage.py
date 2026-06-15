@@ -114,6 +114,22 @@ def test_llm_settings_persist(tmp_path):
     assert loaded.openrouter_reserve_model_2 == "reserve-b"
 
 
+def test_clear_llm_settings_restores_defaults(tmp_path):
+    store = TopicStore(tmp_path / "qa.sqlite")
+    defaults = LlmSettings(provider="local", local_model="env-model")
+    store.update_llm_settings(
+        LlmSettings(provider="openrouter", openrouter_main_model="main"),
+        user_id="user-test",
+    )
+
+    store.clear_llm_settings(user_id="user-test")
+    loaded = store.get_llm_settings(defaults, user_id="user-test")
+
+    assert loaded.provider == "local"
+    assert loaded.local_model == "env-model"
+    assert loaded.openrouter_main_model == defaults.openrouter_main_model
+
+
 def test_user_scoped_topics_threads_and_messages(tmp_path):
     store = TopicStore(tmp_path / "qa.sqlite")
     alice_topic = store.create_topic(TopicCreate(name="Project"), user_id="user-alice")

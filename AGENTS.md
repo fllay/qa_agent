@@ -163,6 +163,7 @@
 - Replaced the font-rendered LLM settings close `x` with a drawn cross icon in CSS so the close button stays visually centered across browsers.
 - Applied a small rightward optical offset to the drawn LLM settings close icon so the `x` no longer reads slightly left of center inside the circle.
 - Standardized all modal close buttons to the same top-right circular `x` control across create-topic, topic-settings, model-settings, and graph dialogs, and bumped the chat asset version so cached UI picks up the shared close-button pattern.
+- Changed `Default (.env)` in model settings to be a true read-only default state: selecting it now clears the saved user override instead of persisting over the default, and the settings fields become disabled while that option is active.
 - Increased the vertical gap between the home-page action buttons and the instruction cards below them so the CTA row does not feel crowded against the three setup steps.
 - Added explicit top margin on the home-page instruction-card section itself, because button-only spacing was visually swallowed by the hero layout and did not create enough separation on screen.
 - Increased the home-page instruction-card top margin again so the action buttons sit farther above the three setup cards.

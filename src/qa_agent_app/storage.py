@@ -343,6 +343,10 @@ class TopicStore:
                 )
         return payload
 
+    def clear_llm_settings(self, user_id: str = DEFAULT_USER_ID) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM app_settings WHERE key LIKE ?", (f"llm.{user_id}.%",))
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

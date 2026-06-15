@@ -208,6 +208,16 @@ def update_llm_settings(
     return store.update_llm_settings(payload, user_id=user_id)
 
 
+@app.delete("/api/llm-settings", response_model=LlmSettings)
+def clear_llm_settings(
+    settings: Settings = Depends(get_settings),
+    user_id: str = Depends(get_user_id),
+    store: TopicStore = Depends(get_store),
+) -> LlmSettings:
+    store.clear_llm_settings(user_id=user_id)
+    return default_llm_settings(settings)
+
+
 @app.post("/api/topics", response_model=Topic)
 def create_topic(
     payload: TopicCreate,

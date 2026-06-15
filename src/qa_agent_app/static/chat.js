@@ -165,13 +165,30 @@ function setLlmDefaultLabel(settings) {
   }
 }
 
+function setLlmInputsDisabled(disabled) {
+  [
+    els.llmLocalBaseUrl,
+    els.llmLocalApiKey,
+    els.llmLocalModel,
+    els.llmOpenrouterApiKey,
+    els.llmOpenrouterBaseUrl,
+    els.llmOpenrouterMainModel,
+    els.llmOpenrouterReserveModel1,
+    els.llmOpenrouterReserveModel2,
+  ].forEach((input) => {
+    input.disabled = disabled;
+  });
+}
+
 function applyLlmProviderVisibility(provider) {
-  if (provider === "default" && llmDefaultSettings) {
+  const useDefault = provider === "default";
+  if (useDefault && llmDefaultSettings) {
     provider = llmDefaultSettings.provider;
   }
   const local = provider !== "openrouter";
   els.localSettingsFields.hidden = !local;
   els.openrouterSettingsFields.hidden = local;
+  setLlmInputsDisabled(useDefault);
 }
 
 function populateLlmSettingsForm(settings, providerMode = null) {
@@ -885,9 +902,7 @@ els.llmSettingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (isSavingLlmSettings) return;
   const providerValue = els.llmProvider.value;
-  const payload = providerValue === "default" && llmDefaultSettings
-    ? normalizeLlmSettings(llmDefaultSettings)
-    : normalizeLlmSettings({
+  const payload = normalizeLlmSettings({
     provider: providerValue,
     local_base_url: els.llmLocalBaseUrl.value.trim(),
     local_api_key: els.llmLocalApiKey.value.trim(),
@@ -902,17 +917,19 @@ els.llmSettingsForm.addEventListener("submit", async (event) => {
   try {
     setLlmSettingsBusy(true, "Saving...");
     llmSettings = normalizeLlmSettings(
-      await api("/api/llm-settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }),
+      providerValue === "default"
+        ? await api("/api/llm-settings", { method: "DELETE" })
+        : await api("/api/llm-settings", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
     );
     populateLlmSettingsForm(llmSettings, providerValue === "default" ? "default" : null);
     els.llmSettingsModal.close();
     showToast(
       providerValue === "default"
-        ? `Model settings reset to the .env default (${labelProvider(llmSettings.provider)}).`
+        ? `User override cleared. Using the .env default (${labelProvider(llmSettings.provider)}).`
         : `Model settings saved for ${labelProvider(llmSettings.provider)}.`,
     );
   } catch (error) {
