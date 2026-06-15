@@ -181,3 +181,4 @@
 - Added adaptive Graphify binary resolution via `GRAPHIFY_BIN=auto`, including PATH lookup, Windows user-site fallback, updated env examples, docs, and regression tests.
 - Updated the Docker build to install the Graphify CLI from the `graphifyy` package with a build-time version argument.
 - Made Docker Graphify installation the default verified path by checking `graphify --version` during image build and clarifying that plain `docker compose up --build` includes Graphify.
+- Added a Docker entrypoint that prepares mounted `/app/data` permissions as root and then drops to `appuser`, fixing server deployments where topic creation failed with `PermissionError` on `/app/data/topics`.

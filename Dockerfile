@@ -15,10 +15,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         git \
+        gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt pyproject.toml README.md ./
 COPY src ./src
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
@@ -29,10 +31,10 @@ RUN graphify --version
 
 RUN useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /app/data \
-    && chown -R appuser:appuser /app
-
-USER appuser
+    && chown -R appuser:appuser /app \
+    && chmod 755 /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8000
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "uvicorn", "qa_agent_app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -35,6 +35,7 @@ docker compose up --build
 ```
 
 Open `http://127.0.0.1:8000`. The compose setup bind-mounts `./data` into the container so topic workspaces, Graphify outputs, and SQLite state persist locally.
+On Linux servers, the container entrypoint creates `/app/data` and fixes ownership of the mounted data directory before starting the app, so first-run topic creation can write `data/topics/`.
 
 The image includes Git and installs Graphify from the `graphifyy` package by default. A normal Compose build is enough:
 
