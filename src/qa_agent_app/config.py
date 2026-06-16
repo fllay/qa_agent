@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     )
     graphify_bin: str = Field(default="auto", validation_alias=AliasChoices("GRAPHIFY_BIN", "QA_AGENT_GRAPHIFY_BIN"))
     graphify_timeout_seconds: int = Field(
-        default=900,
+        default=1800,
         validation_alias=AliasChoices("GRAPHIFY_TIMEOUT_SECONDS", "QA_AGENT_GRAPHIFY_TIMEOUT_SECONDS"),
     )
     github_token: str | None = Field(default=None, validation_alias=AliasChoices("GITHUB_TOKEN", "QA_AGENT_GITHUB_TOKEN"))

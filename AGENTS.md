@@ -38,7 +38,9 @@
 
 - Restyled the Cosmograph graph modal toward an Obsidian-like graph view by switching the stage, modal chrome, and sidebar cards to a dark slate surface, moving node families to a cooler muted palette, and retuning link colors plus ring highlights so the graph reads like a dark knowledge-map instead of a bright white diagram.
 - Reduced node size specifically for smaller Cosmograph graphs by making point radii and global point scaling depend on graph size, then backed out the forced dark modal/stage theme so the graph keeps the lighter QA Agent surface while preserving the newer renderer and small-graph sizing fix.
+- Rebalanced the Cosmograph size ratios again so small graphs render with noticeably tighter node radii, while medium/large graphs keep readable nodes but taper link widths and link opacity down as total node count climbs, preventing dense large graphs from being dominated by heavy lines.
 - Diagnosed the latest Docker complaint as a startup bottleneck rather than a Dockerfile compile failure: the image built cleanly, but `docker-entrypoint.sh` was recursively `chown`ing the entire bind-mounted `data/` tree on every start, which is expensive with the current `~65k` filesystem entries; changed the entrypoint to perform the recursive ownership repair once by default using a marker file, with `QA_AGENT_FORCE_RECURSIVE_CHOWN=1` available for an explicit full re-run.
+- Increased Graphify timeout handling for large ingests by raising the base default from `900` to `1800` seconds in app and Docker defaults, and made `GraphifyClient` scale its effective timeout up to `3600` or `7200` seconds automatically for large source trees based on file-count and on-disk-size thresholds, so big repositories are less likely to fail on the initial graph build.
 
 ## 2026-06-08
 

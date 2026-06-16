@@ -43,7 +43,7 @@ const LARGE_GRAPH_DENSE_DIRECT_NODE_THRESHOLD = 2400;
 const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
 const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
 const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
-const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260616-obsidian-graph3";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260616-graph-ratio1";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -1267,6 +1267,8 @@ async function renderGraphStage(payload, graphModel) {
   const nodeIds = new Set(nodes.map((node) => node.id));
   const smallGraphMode = graphModel.totalNodes <= 600;
   const mediumGraphMode = !smallGraphMode && graphModel.totalNodes < LARGE_GRAPH_LAYOUT_THRESHOLD;
+  const largeGraphMode = graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD;
+  const hugeGraphMode = graphModel.totalNodes >= 24000;
   const mainNodes = nodes.filter((node) => node.family === "repository");
   if (!mainNodes.length) {
     const fallbackMainNode = nodes.reduce((best, node) => (!best || node.degree > best.degree ? node : best), null);
@@ -1284,15 +1286,19 @@ async function renderGraphStage(payload, graphModel) {
         node.radius *
         (node.family === "repository"
           ? smallGraphMode
-            ? 2.55
+            ? 2.1
             : mediumGraphMode
-              ? 3.05
-              : 3.6
+              ? 2.78
+              : hugeGraphMode
+                ? 3.15
+                : 3.38
           : smallGraphMode
-            ? 2.9
+            ? 2.34
             : mediumGraphMode
-              ? 3.45
-              : 4.15)
+              ? 3.0
+              : hugeGraphMode
+                ? 3.5
+                : 3.74)
       ).toFixed(3),
     ),
     family: node.familyLabel,
@@ -1306,11 +1312,12 @@ async function renderGraphStage(payload, graphModel) {
       const sameFamily = sourceNode && targetNode ? sourceNode.family === targetNode.family : false;
       const touchesRepository =
         sourceNode && targetNode ? sourceNode.family === "repository" || targetNode.family === "repository" : false;
+      const widthScale = smallGraphMode ? 1 : mediumGraphMode ? 0.88 : hugeGraphMode ? 0.52 : 0.66;
       return {
         source: edge.source,
         target: edge.target,
         color: sameFamily ? "rgba(126, 156, 196, 0.28)" : "rgba(91, 103, 125, 0.2)",
-        width: touchesRepository ? 0.082 : sameFamily ? 0.064 : 0.046,
+        width: Number(((touchesRepository ? 0.082 : sameFamily ? 0.064 : 0.046) * widthScale).toFixed(4)),
       };
     });
 
@@ -1366,12 +1373,12 @@ async function renderGraphStage(payload, graphModel) {
     ...cosmographConfig,
     backgroundColor: "#f8fafc",
     pointOpacity: 0.94,
-    pointSizeScale: smallGraphMode ? 1.08 : mediumGraphMode ? 1.24 : 1.5,
+    pointSizeScale: smallGraphMode ? 0.92 : mediumGraphMode ? 1.08 : hugeGraphMode ? 1.22 : 1.3,
     pointSamplingDistance: 2,
     pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
     scalePointsOnZoom: false,
     renderLinks: true,
-    linkOpacity: 0.86,
+    linkOpacity: largeGraphMode ? 0.8 : 0.86,
     renderHoveredPointRing: true,
     hoveredPointRingColor: GRAPH_NODE_OUTLINE_HOVER_COLOR,
     focusedPointRingColor: GRAPH_MAIN_NODE_OUTLINE_COLOR,

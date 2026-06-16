@@ -47,6 +47,8 @@ def test_graphify_retries_code_only_when_semantic_key_missing(tmp_path, monkeypa
     monkeypatch.setattr("qa_agent_app.graphify_client.shutil.which", lambda command: command)
     monkeypatch.setattr("qa_agent_app.graphify_client.subprocess.run", fake_run)
 
+    monkeypatch.setattr(GraphifyClient, "_estimate_source_size", staticmethod(lambda _source_dir: (10, 1024)))
+
     graph_path = GraphifyClient("graphify", 10).build_graph(topic_dir, source_dir)
 
     assert graph_path == graph_dir / "graph.json"
@@ -54,3 +56,21 @@ def test_graphify_retries_code_only_when_semantic_key_missing(tmp_path, monkeypa
         ["graphify", "extract", str(source_dir.resolve()), "--out", str(topic_dir.resolve()), "--no-cluster"],
         ["graphify", "update", str(source_dir.resolve()), "--no-cluster", "--force"],
     ]
+
+
+def test_graphify_timeout_scales_up_for_large_sources(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+
+    client = GraphifyClient("graphify", 900)
+
+    assert client._resolve_timeout_seconds(source_dir) == 900
+
+    client._estimate_source_size = lambda _source_dir: (3000, 50 * 1024 * 1024)
+    assert client._resolve_timeout_seconds(source_dir) == 1800
+
+    client._estimate_source_size = lambda _source_dir: (9000, 50 * 1024 * 1024)
+    assert client._resolve_timeout_seconds(source_dir) == 3600
+
+    client._estimate_source_size = lambda _source_dir: (25000, 50 * 1024 * 1024)
+    assert client._resolve_timeout_seconds(source_dir) == 7200
