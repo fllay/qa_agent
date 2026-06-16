@@ -8,6 +8,10 @@
 
 # Change Log
 
+## 2026-06-16
+
+- Diagnosed a local runtime confusion where the QA Agent app was already running in Docker on port `8000` (`qa_agent-qa-agent-1`), so extra Uvicorn launches failed with `WinError 10048`; verified the container serves `/chat` successfully via `http://localhost:8000/chat`, while ad hoc checks against `127.0.0.1:8000` were less reliable on this Windows/Docker setup and ports `8010`/`8011` were not active listeners.
+
 ## 2026-06-15
 
 - Investigated the server-side graph popup failure on `192.168.168.98` and confirmed the deployed topic graph API was returning HTTP `200` with a very large Graphify payload (`63817` nodes, `195801` edges), so the browser bottleneck was client-side graph layout/render cost rather than graph loading.
@@ -16,6 +20,25 @@
 - Corrected the full-graph viewer after the first large-graph render was visually too heavy: kept the full payload, reduced large-graph node radii and opacity, rendered overview edges as faint hairlines, spread large communities with deterministic lightweight placement, and made zoom bounds preserve the full-graph overview instead of jumping into the dense center.
 - Optimized the Dockerfile for faster rebuilds by installing Python dependencies and `graphifyy` before copying `src/`, enabling a BuildKit pip cache mount, importing the app through `PYTHONPATH=/app/src`, and avoiding a source-dependent `pip install .` layer on every frontend/backend edit.
 - Fixed the next full-graph popup regression by removing upfront allocation of large edge render objects, keeping large-graph edges hidden until the user zooms in enough for them to matter, tightening the overview placement curve so reset/open no longer collapses into a tiny unreadable cloud, and redeploying the updated frontend to `192.168.168.98`.
+- Improved large-graph interaction performance by adding a spatial index for visible-node and hover queries, drawing overview nodes as cheap point marks, skipping large-graph edge work while dragging, capping zoomed edge draws, and uploading the optimized Dockerfile plus updated graph frontend to the server.
+- Optimized zoomed-out full-graph interaction by pre-rendering large graphs into a cached overview canvas layer, using that bitmap for low-zoom pan/zoom frames, hiding labels until closer zoom, and keeping full individual-node rendering for closer inspection.
+- Replaced the low-zoom cached bitmap with aggregated large-graph level-of-detail points plus soft edge falloff, keeping zoomed-out interaction fast without the rectangular pale overview artifact.
+- Added a second large-graph mid-zoom level-of-detail stage that keeps slight zoom-in interaction aggregated, suppresses edge and hover work until deeper zoom, and only switches to direct per-node rendering once the visible node count is materially smaller.
+- Tuned the first direct-render band further by extending aggregation a bit longer, dropping most stroke work while dense direct node counts remain high, always redrawing and labeling the main repository node on top, and increasing node size across the large-graph viewer.
+- Changed main-node pinning to treat all repository-family nodes as persistent main nodes, redrawing and labeling each of them on top, and eased the zoom size curve again so nodes stay larger at smaller zoom scales.
+- Stabilized graph colors across zoom modes by deriving overview and mid-LOD point alpha from the underlying node opacity instead of separate family-based fade formulas, so colors no longer visibly shift when the renderer changes mode.
+- Fixed the dark outline artifact by softening the default node stroke color and preventing pinned repository nodes from being outlined in both the base node pass and the overlay pass at the same time.
+- Replaced the custom graph canvas renderer with a Cosmograph WebGL viewer loaded in the static frontend, mapped the existing graph payload into direct point/link color and size fields, kept repository nodes pinned in `showLabelsFor`, and preserved the existing graph modal/sidebar shell around the new viewer.
+- Replaced the remote Cosmograph CDN ESM import with a locally served bundled `vendor/cosmograph-bundle.js` build pinned to `@cosmograph/cosmograph@2.3.2`, removing the runtime dependency graph that triggered `luma.gl` multiple-version warnings in the browser console.
+- Rebalanced the first Cosmograph styling pass by increasing point size inputs and global point scale, reducing direct link widths and opacity, slightly increasing point sampling distance, and enlarging simulation space so node visibility stays ahead of link density in large repository graphs.
+- Tuned the Cosmograph follow-up pass by making links thinner but slightly more visible, enlarging non-repository nodes further, and stopping the simulation shortly after graph rebuild so the layout settles instead of continuing to drift.
+- Raised Cosmograph link visibility again by keeping links thin but moving their per-link RGBA alpha and global `linkOpacity` much closer to opaque, so graph connections remain readable instead of fading into the stage background.
+
+## 2026-06-16
+
+- Restyled the Cosmograph graph modal toward an Obsidian-like graph view by switching the stage, modal chrome, and sidebar cards to a dark slate surface, moving node families to a cooler muted palette, and retuning link colors plus ring highlights so the graph reads like a dark knowledge-map instead of a bright white diagram.
+- Reduced node size specifically for smaller Cosmograph graphs by making point radii and global point scaling depend on graph size, then backed out the forced dark modal/stage theme so the graph keeps the lighter QA Agent surface while preserving the newer renderer and small-graph sizing fix.
+- Diagnosed the latest Docker complaint as a startup bottleneck rather than a Dockerfile compile failure: the image built cleanly, but `docker-entrypoint.sh` was recursively `chown`ing the entire bind-mounted `data/` tree on every start, which is expensive with the current `~65k` filesystem entries; changed the entrypoint to perform the recursive ownership repair once by default using a marker file, with `QA_AGENT_FORCE_RECURSIVE_CHOWN=1` available for an explicit full re-run.
 
 ## 2026-06-08
 

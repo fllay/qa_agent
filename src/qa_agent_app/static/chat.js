@@ -20,14 +20,30 @@ let activeGraphView = { scale: 1, offsetX: 0, offsetY: 0 };
 let activeGraphScene = null;
 let activeGraphFrame = 0;
 let activeGraphCanvas = null;
+let activeCosmograph = null;
+let cosmographLibPromise = null;
+let activeGraphSettleTimer = null;
 let graphWindowListenersBound = false;
 const graphDragState = { dragging: false, startX: 0, startY: 0 };
 const GRAPH_VIEWBOX = { width: 1320, height: 720 };
 const GRAPH_NODE_LIST_LIMIT = 120;
 const LARGE_GRAPH_LAYOUT_THRESHOLD = 9000;
 const LARGE_GRAPH_NODE_PICK_THRESHOLD = 12000;
-const LARGE_GRAPH_EDGE_VISIBILITY_SCALE = 0.085;
-const LARGE_GRAPH_LABEL_VISIBILITY_SCALE = 0.22;
+const LARGE_GRAPH_EDGE_VISIBILITY_SCALE = 0.28;
+const LARGE_GRAPH_LABEL_VISIBILITY_SCALE = 0.48;
+const LARGE_GRAPH_OVERVIEW_LOD_SCALE = 0.5;
+const LARGE_GRAPH_MID_LOD_SCALE = 0.9;
+const LARGE_GRAPH_OVERVIEW_CELL_SIZE = 11;
+const LARGE_GRAPH_MID_LOD_SCREEN_CELL = 7;
+const LARGE_GRAPH_SPATIAL_CELL_SIZE = 92;
+const LARGE_GRAPH_MAX_EDGE_DRAWS = 6000;
+const LARGE_GRAPH_MAX_EDGE_VISIBLE_NODES = 3500;
+const LARGE_GRAPH_MAX_DIRECT_NODE_DRAWS = 5200;
+const LARGE_GRAPH_DENSE_DIRECT_NODE_THRESHOLD = 2400;
+const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
+const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
+const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260616-obsidian-graph3";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -124,6 +140,32 @@ async function api(path, options = {}) {
   }
   if (response.status === 204) return null;
   return response.json();
+}
+
+async function loadCosmographLibrary() {
+  if (!cosmographLibPromise) {
+    cosmographLibPromise = import(COSMOGRAPH_MODULE_URL);
+  }
+  return cosmographLibPromise;
+}
+
+async function destroyActiveGraphRenderer() {
+  if (activeGraphSettleTimer) {
+    window.clearTimeout(activeGraphSettleTimer);
+    activeGraphSettleTimer = null;
+  }
+  const current = activeCosmograph;
+  activeCosmograph = null;
+  if (current?.destroy) {
+    try {
+      await current.destroy();
+    } catch (error) {
+      console.warn("Failed to destroy Cosmograph instance.", error);
+    }
+  }
+  activeGraphScene = null;
+  activeGraphCanvas = null;
+  graphDragState.dragging = false;
 }
 
 function showToast(message) {
@@ -718,16 +760,12 @@ els.closeSettingsModal.addEventListener("click", () => els.settingsModal.close()
 els.closeLlmSettingsModal.addEventListener("click", () => els.llmSettingsModal.close());
 els.closeGraphModal.addEventListener("click", () => {
   activeGraphTopicId = null;
-  activeGraphScene = null;
-  activeGraphCanvas = null;
-  graphDragState.dragging = false;
   els.graphModal.close();
+  void destroyActiveGraphRenderer();
 });
 els.graphModal.addEventListener("close", () => {
   activeGraphTopicId = null;
-  activeGraphScene = null;
-  activeGraphCanvas = null;
-  graphDragState.dragging = false;
+  void destroyActiveGraphRenderer();
 });
 els.modalAddSource.addEventListener("click", addModalSourceFromInput);
 els.settingsAddSource.addEventListener("click", addSettingsSourceFromInput);
@@ -1140,6 +1178,7 @@ function openTopicSettings(topicId) {
 async function openTopicGraph(topicId) {
   const topic = topics.find((item) => item.id === topicId);
   if (!topic) return;
+  await destroyActiveGraphRenderer();
   activeGraphTopicId = topicId;
   els.graphTitle.textContent = `Topic graph: ${topic.name}`;
   els.graphSubtitle.textContent = "Loading saved graph preview...";
@@ -1154,7 +1193,7 @@ async function openTopicGraph(topicId) {
     if (activeGraphTopicId !== topicId) {
       return;
     }
-    renderTopicGraph(payload);
+    await renderTopicGraph(payload);
   } catch (error) {
     if (activeGraphTopicId !== topicId) {
       return;
@@ -1165,7 +1204,7 @@ async function openTopicGraph(topicId) {
   }
 }
 
-function renderTopicGraph(payload) {
+async function renderTopicGraph(payload) {
   const graphModel = buildGraphModel(payload);
   els.graphTitle.textContent = `Topic graph: ${payload.topic_name}`;
   els.graphSubtitle.textContent = payload.sampled
@@ -1174,7 +1213,7 @@ function renderTopicGraph(payload) {
   els.graphNodeCount.textContent = String(payload.total_nodes);
   els.graphEdgeCount.textContent = String(payload.total_edges);
   els.graphKind.textContent = payload.graph_kind === "fallback" ? "Fallback graph" : "Graphify graph";
-  renderGraphStage(payload, graphModel);
+  await renderGraphStage(payload, graphModel);
   renderGraphClusterList(payload, graphModel.groups);
   renderGraphNodeList(graphModel.nodes);
 }
@@ -1212,89 +1251,172 @@ function renderGraphClusterList(payload, groups) {
   }
 }
 
-function renderGraphStage(payload, graphModel) {
-  const { width, height } = GRAPH_VIEWBOX;
-  const positions = new Map();
+async function renderGraphStage(payload, graphModel) {
   const nodes = graphModel.nodes;
-  const largeGraphMode = graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD;
   if (!nodes.length) {
     activeGraphScene = null;
     els.graphStage.innerHTML = `<div class="graph-stage-empty">This graph does not contain previewable nodes.</div>`;
     return;
   }
 
-  const groups = graphModel.groups;
-  assignGraphGroupCenters(groups, width, height);
-
-  groups.forEach((group) => {
-    placeClusterNodes(group, positions);
-  });
-
-  if (largeGraphMode) {
-    spreadLargeGraphPositions(nodes, positions, groups);
-  } else {
-    relaxGraphPositions(nodes, payload.edges || [], positions, graphModel.nodeMap, groups, width, height);
-    separateOverlappingGraphNodes(nodes, positions);
-    normalizeGraphPositions(groups, positions, width, height);
-    separateOverlappingGraphNodes(nodes, positions);
+  const { Cosmograph, prepareCosmographData } = await loadCosmographLibrary();
+  if (!els.graphModal.open || activeGraphTopicId === null) {
+    return;
   }
+
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const smallGraphMode = graphModel.totalNodes <= 600;
+  const mediumGraphMode = !smallGraphMode && graphModel.totalNodes < LARGE_GRAPH_LAYOUT_THRESHOLD;
+  const mainNodes = nodes.filter((node) => node.family === "repository");
+  if (!mainNodes.length) {
+    const fallbackMainNode = nodes.reduce((best, node) => (!best || node.degree > best.degree ? node : best), null);
+    if (fallbackMainNode) {
+      mainNodes.push(fallbackMainNode);
+    }
+  }
+  const mainNodeIds = mainNodes.map((node) => node.id);
+  const pointRows = nodes.map((node) => ({
+    id: node.id,
+    label: shortGraphLabel(node.label),
+    color: node.color,
+    size: Number(
+      (
+        node.radius *
+        (node.family === "repository"
+          ? smallGraphMode
+            ? 2.55
+            : mediumGraphMode
+              ? 3.05
+              : 3.6
+          : smallGraphMode
+            ? 2.9
+            : mediumGraphMode
+              ? 3.45
+              : 4.15)
+      ).toFixed(3),
+    ),
+    family: node.familyLabel,
+    degree: node.degree,
+  }));
+  const linkRows = (payload.edges || [])
+    .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+    .map((edge) => {
+      const sourceNode = graphModel.nodeMap.get(edge.source);
+      const targetNode = graphModel.nodeMap.get(edge.target);
+      const sameFamily = sourceNode && targetNode ? sourceNode.family === targetNode.family : false;
+      const touchesRepository =
+        sourceNode && targetNode ? sourceNode.family === "repository" || targetNode.family === "repository" : false;
+      return {
+        source: edge.source,
+        target: edge.target,
+        color: sameFamily ? "rgba(126, 156, 196, 0.28)" : "rgba(91, 103, 125, 0.2)",
+        width: touchesRepository ? 0.082 : sameFamily ? 0.064 : 0.046,
+      };
+    });
+
+  const prepared = await prepareCosmographData(
+    {
+      points: {
+        pointIdBy: "id",
+        pointLabelBy: "label",
+        pointColorBy: "color",
+        pointColorStrategy: "direct",
+        pointSizeBy: "size",
+        pointSizeStrategy: "direct",
+      },
+      links: {
+        linkSourceBy: "source",
+        linkTargetsBy: ["target"],
+        linkColorBy: "color",
+        linkColorStrategy: "direct",
+        linkWidthBy: "width",
+        linkWidthStrategy: "direct",
+      },
+    },
+    pointRows,
+    linkRows,
+  );
+  if (!prepared || !els.graphModal.open || activeGraphTopicId === null) {
+    return;
+  }
+
   els.graphStage.innerHTML = `
     <div class="graph-toolbar">
       <button type="button" class="graph-tool-button" data-graph-zoom="out" aria-label="Zoom out">-</button>
       <button type="button" class="graph-tool-button" data-graph-zoom="in" aria-label="Zoom in">+</button>
       <button type="button" class="graph-tool-button" data-graph-zoom="reset" aria-label="Reset zoom">Reset</button>
     </div>
-    <canvas class="graph-canvas" width="${width}" height="${height}" aria-label="Graph preview for ${escapeHtml(payload.topic_name)}"></canvas>
-    <div class="graph-tooltip" hidden></div>
+    <div class="graph-cosmograph-host" aria-label="Graph preview for ${escapeHtml(payload.topic_name)}"></div>
   `;
-  const labelNodes = nodes
-    .filter((node) => shouldShowGraphNodeLabel(node, graphModel.totalNodes))
-    .map((node) => ({
-      id: node.id,
-      text: shortGraphLabel(node.label),
-      color: node.strokeColor,
-      x: positions.get(node.id).x,
-      y: positions.get(node.id).y,
-      radius: node.radius,
-    }));
-  const sceneNodes = nodes.map((node) => ({ ...node, x: positions.get(node.id).x, y: positions.get(node.id).y }));
-  const sceneNodeById = new Map(sceneNodes.map((node) => [node.id, node]));
-  const drawEdges = largeGraphMode
-    ? []
-    : (payload.edges || [])
-        .filter((edge) => sceneNodeById.has(edge.source) && sceneNodeById.has(edge.target))
-        .map((edge) => {
-          const sourceNode = sceneNodeById.get(edge.source);
-          const targetNode = sceneNodeById.get(edge.target);
-          const sameFamily = sourceNode.family === targetNode.family;
-          const touchesRepository = sourceNode.family === "repository" || targetNode.family === "repository";
-          return {
-            source: sourceNode,
-            target: targetNode,
-            color: sameFamily ? "rgba(115, 126, 145, 0.26)" : "rgba(112, 124, 145, 0.18)",
-            width: touchesRepository ? 0.55 : sameFamily ? 1.05 : 0.8,
-            opacity: touchesRepository ? 0.38 : 0.7,
-          };
-        });
+  const host = els.graphStage.querySelector(".graph-cosmograph-host");
+  if (!host) {
+    return;
+  }
+
+  const { points, links, cosmographConfig } = prepared;
+  const pointIndexById = new Map(pointRows.map((point, index) => [point.id, index]));
   activeGraphScene = {
-    width,
-    height,
-    nodes: sceneNodes,
-    nodeById: sceneNodeById,
-    edges: drawEdges,
-    rawEdges: largeGraphMode ? payload.edges || [] : [],
-    labels: labelNodes,
     totalNodes: graphModel.totalNodes,
-    totalEdges: largeGraphMode ? (payload.edges || []).length : drawEdges.length,
-    largeGraphMode,
-    bounds: graphViewportBounds(sceneNodes),
-    minScale: null,
-    hoverNodeId: null,
+    totalEdges: linkRows.length,
+    mainNodeIds: new Set(mainNodeIds),
   };
-  resetGraphViewport(width, height, activeGraphScene.bounds);
-  scheduleGraphRedraw();
-  wireGraphZoom();
-  wireGraphTooltip();
+  activeCosmograph = new Cosmograph(host, {
+    points,
+    links,
+    ...cosmographConfig,
+    backgroundColor: "#f8fafc",
+    pointOpacity: 0.94,
+    pointSizeScale: smallGraphMode ? 1.08 : mediumGraphMode ? 1.24 : 1.5,
+    pointSamplingDistance: 2,
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
+    scalePointsOnZoom: false,
+    renderLinks: true,
+    linkOpacity: 0.86,
+    renderHoveredPointRing: true,
+    hoveredPointRingColor: GRAPH_NODE_OUTLINE_HOVER_COLOR,
+    focusedPointRingColor: GRAPH_MAIN_NODE_OUTLINE_COLOR,
+    fitViewOnInit: true,
+    fitViewPadding: 0.08,
+    fitViewDuration: 250,
+    enableSimulationDuringZoom: false,
+    enableDrag: false,
+    spaceSize: 8192,
+    randomSeed: payload.topic_name,
+    showTopLabels: true,
+    showTopLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 18 : 28,
+    showDynamicLabels: true,
+    showDynamicLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 14 : 22,
+    showLabelsFor: mainNodeIds,
+    showHoveredPointLabel: true,
+    onGraphRebuilt: () => {
+      if (activeGraphSettleTimer) {
+        window.clearTimeout(activeGraphSettleTimer);
+      }
+      activeGraphSettleTimer = window.setTimeout(() => {
+        activeGraphSettleTimer = null;
+        activeCosmograph?.stop?.();
+      }, 900);
+    },
+    onPointClick: (index) => {
+      activeCosmograph?.zoomToPoint(index, 220, Math.max(activeCosmograph?.getZoomLevel?.() || 1, 1.6), true);
+    },
+  });
+
+  els.graphStage.querySelectorAll("[data-graph-zoom]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!activeCosmograph) {
+        return;
+      }
+      const action = button.dataset.graphZoom;
+      if (action === "reset") {
+        activeCosmograph.fitView(220, 0.08);
+        return;
+      }
+      const currentZoom = activeCosmograph.getZoomLevel?.() || 1;
+      const nextZoom = action === "in" ? currentZoom * 1.2 : currentZoom / 1.2;
+      activeCosmograph.setZoomLevel(nextZoom, 180);
+    });
+  });
 }
 
 async function deleteTopic(topicId) {
@@ -1782,10 +1904,10 @@ function buildGraphModel(payload) {
     const degree = Number(node.degree || 0);
     const radius = largeGraphMode
       ? Math.max(
-          family === "repository" ? 4.2 : 0.72,
+          family === "repository" ? 5.4 : 0.92,
           Math.min(
-            family === "repository" ? 8.4 : degree >= 12 ? 2.6 : 1.8,
-            (family === "repository" ? 4.8 + Math.sqrt(degree + 1) * 0.42 : 0.82 + Math.sqrt(degree + 1) * 0.16) *
+            family === "repository" ? 10.8 : degree >= 12 ? 3.35 : 2.28,
+            (family === "repository" ? 6.2 + Math.sqrt(degree + 1) * 0.52 : 1.04 + Math.sqrt(degree + 1) * 0.2) *
               layoutScale,
           ),
         )
@@ -1803,7 +1925,7 @@ function buildGraphModel(payload) {
       family,
       familyLabel: graphFamilyLabel(family),
       color,
-      strokeColor: "#11141b",
+      strokeColor: GRAPH_NODE_OUTLINE_COLOR,
       strokeWidth: largeGraphMode ? 0.35 : degree >= 10 ? 1.6 : 1.05,
       opacity: largeGraphMode ? (family === "repository" ? 0.88 : degree >= 10 ? 0.62 : 0.46) : 1,
       radius,
@@ -1955,6 +2077,213 @@ function graphViewportBounds(nodes) {
     minY: Math.min(...points.map((node) => node.y - node.radius)),
     maxY: Math.max(...points.map((node) => node.y + node.radius)),
   };
+}
+
+function buildGraphSpatialIndex(nodes) {
+  const buckets = new Map();
+  for (const node of nodes) {
+    const cellX = Math.floor(node.x / LARGE_GRAPH_SPATIAL_CELL_SIZE);
+    const cellY = Math.floor(node.y / LARGE_GRAPH_SPATIAL_CELL_SIZE);
+    const key = `${cellX}:${cellY}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+    }
+    buckets.get(key).push(node);
+  }
+  return { buckets, cellSize: LARGE_GRAPH_SPATIAL_CELL_SIZE };
+}
+
+function buildGraphOverviewNodes(nodes) {
+  const bounds = graphViewportBounds(nodes);
+  if (!bounds) {
+    return [];
+  }
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const radiusX = Math.max(1, (bounds.maxX - bounds.minX) / 2);
+  const radiusY = Math.max(1, (bounds.maxY - bounds.minY) / 2);
+  const buckets = new Map();
+  for (const node of nodes) {
+    const cellX = Math.floor(node.x / LARGE_GRAPH_OVERVIEW_CELL_SIZE);
+    const cellY = Math.floor(node.y / LARGE_GRAPH_OVERVIEW_CELL_SIZE);
+    const key = `${cellX}:${cellY}:${node.family}`;
+    const bucket = buckets.get(key) || {
+      x: 0,
+      y: 0,
+      count: 0,
+      color: node.color,
+      family: node.family,
+      maxRadius: 0,
+      opacityTotal: 0,
+      rank: Number.POSITIVE_INFINITY,
+    };
+    bucket.x += node.x;
+    bucket.y += node.y;
+    bucket.count += 1;
+    bucket.maxRadius = Math.max(bucket.maxRadius, node.radius || 1);
+    bucket.opacityTotal += node.opacity || 1;
+    bucket.rank = Math.min(bucket.rank, node.rankInGroup ?? Number.POSITIVE_INFINITY);
+    buckets.set(key, bucket);
+  }
+  const overviewNodes = [];
+  for (const bucket of buckets.values()) {
+    const x = bucket.x / bucket.count;
+    const y = bucket.y / bucket.count;
+    const normalizedX = (x - centerX) / radiusX;
+    const normalizedY = (y - centerY) / radiusY;
+    const radialDistance = Math.sqrt(normalizedX * normalizedX + normalizedY * normalizedY);
+    const edgeFade = Math.max(0.12, Math.min(1, (1.1 - radialDistance) / 0.32));
+    const meanOpacity = bucket.opacityTotal / bucket.count;
+    overviewNodes.push({
+      x,
+      y,
+      count: bucket.count,
+      color: bucket.color,
+      family: bucket.family,
+      radius: Math.max(1, Math.min(4.8, Math.sqrt(bucket.count) * 0.95 + bucket.maxRadius * 0.24)),
+      alpha: Math.max(0.16, Math.min(0.88, meanOpacity * (0.78 + edgeFade * 0.22))),
+      rank: bucket.rank,
+    });
+  }
+  overviewNodes.sort((left, right) => {
+    const familyPriority = { repository: 0, code: 1, config: 2, document: 3, entity: 4 };
+    return (
+      (familyPriority[left.family] ?? 5) - (familyPriority[right.family] ?? 5) ||
+      left.rank - right.rank ||
+      right.count - left.count
+    );
+  });
+  return overviewNodes;
+}
+
+function buildVisibleGraphLodPoints(nodes, scale) {
+  if (!nodes.length) {
+    return [];
+  }
+  const worldCellSize = Math.max(4, LARGE_GRAPH_MID_LOD_SCREEN_CELL / Math.max(scale, 0.001));
+  const buckets = new Map();
+  for (const node of nodes) {
+    const cellX = Math.floor(node.x / worldCellSize);
+    const cellY = Math.floor(node.y / worldCellSize);
+    const key = `${cellX}:${cellY}:${node.family}`;
+    const bucket = buckets.get(key) || {
+      x: 0,
+      y: 0,
+      count: 0,
+      color: node.color,
+      family: node.family,
+      maxRadius: 0,
+      opacityTotal: 0,
+      rank: Number.POSITIVE_INFINITY,
+    };
+    bucket.x += node.x;
+    bucket.y += node.y;
+    bucket.count += 1;
+    bucket.maxRadius = Math.max(bucket.maxRadius, node.radius || 1);
+    bucket.opacityTotal += node.opacity || 1;
+    bucket.rank = Math.min(bucket.rank, node.rankInGroup ?? Number.POSITIVE_INFINITY);
+    buckets.set(key, bucket);
+  }
+  const points = [];
+  for (const bucket of buckets.values()) {
+    const meanOpacity = bucket.opacityTotal / bucket.count;
+    points.push({
+      x: bucket.x / bucket.count,
+      y: bucket.y / bucket.count,
+      color: bucket.color,
+      family: bucket.family,
+      count: bucket.count,
+      radius: Math.max(1, Math.min(3.8, Math.sqrt(bucket.count) * 0.72 + bucket.maxRadius * 0.28)),
+      alpha: Math.max(0.16, Math.min(0.88, meanOpacity * (0.82 + Math.min(bucket.count, 8) * 0.02))),
+      rank: bucket.rank,
+    });
+  }
+  points.sort((left, right) => {
+    const familyPriority = { repository: 0, code: 1, config: 2, document: 3, entity: 4 };
+    return (
+      (familyPriority[left.family] ?? 5) - (familyPriority[right.family] ?? 5) ||
+      left.rank - right.rank ||
+      right.count - left.count
+    );
+  });
+  return points;
+}
+
+function drawGraphNodeLabel(context, node, text, scale, radiusScale, fontScale) {
+  const x = node.x * scale + activeGraphView.offsetX;
+  const y = node.y * scale + activeGraphView.offsetY + (node.radius * radiusScale + 11);
+  context.font = `${Math.max(8, Math.round(10 * fontScale))}px Inter, system-ui, sans-serif`;
+  context.lineWidth = 4;
+  context.strokeStyle = "rgba(255, 255, 255, 0.92)";
+  context.strokeText(text, x, y);
+  context.fillStyle = node.strokeColor;
+  context.fillText(text, x, y);
+}
+
+function drawMainGraphNodes(context, mainNodes, scale, radiusScale, fontScale) {
+  if (!mainNodes?.length) {
+    return;
+  }
+  context.textAlign = "center";
+  context.lineJoin = "round";
+  for (const mainNode of mainNodes) {
+    const screenX = mainNode.x * scale + activeGraphView.offsetX;
+    const screenY = mainNode.y * scale + activeGraphView.offsetY;
+    const radius = Math.max(4.5, mainNode.radius * radiusScale * 1.18);
+    context.beginPath();
+    context.arc(screenX, screenY, radius, 0, Math.PI * 2);
+    context.fillStyle = mainNode.color;
+    context.globalAlpha = 1;
+    context.fill();
+    context.strokeStyle = GRAPH_MAIN_NODE_OUTLINE_COLOR;
+    context.lineWidth = Math.max(1.15, mainNode.strokeWidth + 0.32);
+    context.stroke();
+    drawGraphNodeLabel(context, mainNode, shortGraphLabel(mainNode.label), scale, radiusScale, fontScale);
+  }
+}
+
+function graphWorldViewport(padding = 64) {
+  const scale = activeGraphView.scale || 1;
+  return {
+    minX: (-padding - activeGraphView.offsetX) / scale,
+    maxX: (GRAPH_VIEWBOX.width + padding - activeGraphView.offsetX) / scale,
+    minY: (-padding - activeGraphView.offsetY) / scale,
+    maxY: (GRAPH_VIEWBOX.height + padding - activeGraphView.offsetY) / scale,
+  };
+}
+
+function graphVisibleNodes(scene, worldViewport) {
+  if (!scene.largeGraphMode || !scene.spatialIndex) {
+    return scene.nodes;
+  }
+  if (activeGraphView.scale <= scene.minScale * 1.35) {
+    return scene.nodes;
+  }
+  const { buckets, cellSize } = scene.spatialIndex;
+  const minCellX = Math.floor(worldViewport.minX / cellSize);
+  const maxCellX = Math.floor(worldViewport.maxX / cellSize);
+  const minCellY = Math.floor(worldViewport.minY / cellSize);
+  const maxCellY = Math.floor(worldViewport.maxY / cellSize);
+  const visible = [];
+  for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+    for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+      const bucket = buckets.get(`${cellX}:${cellY}`);
+      if (!bucket) {
+        continue;
+      }
+      for (const node of bucket) {
+        if (
+          node.x + node.radius >= worldViewport.minX &&
+          node.x - node.radius <= worldViewport.maxX &&
+          node.y + node.radius >= worldViewport.minY &&
+          node.y - node.radius <= worldViewport.maxY
+        ) {
+          visible.push(node);
+        }
+      }
+    }
+  }
+  return visible;
 }
 
 function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, height) {
@@ -2163,6 +2492,10 @@ function wireGraphTooltip() {
     if (!activeGraphScene) {
       return;
     }
+    if (graphDragState.dragging) {
+      tooltip.hidden = true;
+      return;
+    }
     const stageRect = els.graphStage.getBoundingClientRect();
     const canvasRect = canvas.getBoundingClientRect();
     const x = ((event.clientX - canvasRect.left) / canvasRect.width) * activeGraphScene.width;
@@ -2282,6 +2615,9 @@ function wireGraphZoom() {
     graphDragState.dragging = true;
     graphDragState.startX = event.clientX;
     graphDragState.startY = event.clientY;
+    if (activeGraphScene?.hoverNodeId) {
+      activeGraphScene.hoverNodeId = null;
+    }
     canvas.classList.add("is-dragging");
   });
 
@@ -2303,8 +2639,12 @@ function wireGraphZoom() {
   });
 
   window.addEventListener("mouseup", () => {
+    const wasDragging = graphDragState.dragging;
     graphDragState.dragging = false;
     activeGraphCanvas?.classList.remove("is-dragging");
+    if (wasDragging) {
+      scheduleGraphRedraw();
+    }
   });
 }
 
@@ -2338,22 +2678,93 @@ function drawGraphScene() {
   const radiusScale = graphNodeZoomScale(scale);
   const fontScale = Math.max(0.58, Math.min(1, 0.78 + (radiusScale - 0.55) * 0.9));
   const edgeStride = 1;
-  const drawLargeGraphEdges = !activeGraphScene.largeGraphMode || scale >= LARGE_GRAPH_EDGE_VISIBILITY_SCALE;
+  const useOverviewLod =
+    activeGraphScene.largeGraphMode && activeGraphScene.overviewNodes.length && scale < LARGE_GRAPH_OVERVIEW_LOD_SCALE;
+  const suppressEdgesForScale = activeGraphScene.largeGraphMode && scale < LARGE_GRAPH_MID_LOD_SCALE;
+  const drawLargeGraphEdges =
+    !useOverviewLod &&
+    !suppressEdgesForScale &&
+    (!activeGraphScene.largeGraphMode || scale >= LARGE_GRAPH_EDGE_VISIBILITY_SCALE);
   const viewportPadding = 64;
   const viewportMinX = -viewportPadding;
   const viewportMaxX = width + viewportPadding;
   const viewportMinY = -viewportPadding;
   const viewportMaxY = height + viewportPadding;
+  const worldViewport = graphWorldViewport(viewportPadding);
+  const visibleNodes = useOverviewLod ? [] : graphVisibleNodes(activeGraphScene, worldViewport);
+  const useMidLod =
+    activeGraphScene.largeGraphMode &&
+    !useOverviewLod &&
+    scale < LARGE_GRAPH_MID_LOD_SCALE &&
+    visibleNodes.length > LARGE_GRAPH_MAX_DIRECT_NODE_DRAWS;
+  const lodNodes = useMidLod ? buildVisibleGraphLodPoints(visibleNodes, scale) : [];
+  const useDenseDirectMode =
+    activeGraphScene.largeGraphMode &&
+    !useOverviewLod &&
+    !useMidLod &&
+    visibleNodes.length > LARGE_GRAPH_DENSE_DIRECT_NODE_THRESHOLD;
+  const visibleNodeIds =
+    activeGraphScene.largeGraphMode && !useMidLod && visibleNodes.length <= LARGE_GRAPH_MAX_EDGE_VISIBLE_NODES
+      ? new Set(visibleNodes.map((node) => node.id))
+      : null;
+
+  if (useOverviewLod) {
+    context.save();
+    for (const point of activeGraphScene.overviewNodes) {
+      const screenX = point.x * scale + activeGraphView.offsetX;
+      const screenY = point.y * scale + activeGraphView.offsetY;
+      if (screenX < viewportMinX || screenX > viewportMaxX || screenY < viewportMinY || screenY > viewportMaxY) {
+        continue;
+      }
+      const radius = Math.max(0.9, Math.min(4.5, point.radius * (0.82 + scale * 0.8)));
+      context.beginPath();
+      context.arc(screenX, screenY, radius, 0, Math.PI * 2);
+      context.fillStyle = point.color;
+      context.globalAlpha = point.alpha;
+      context.fill();
+    }
+    context.globalAlpha = 1;
+    context.restore();
+    drawMainGraphNodes(context, activeGraphScene.mainNodes, scale, radiusScale, fontScale);
+  }
+
+  if (useMidLod) {
+    context.save();
+    for (const point of lodNodes) {
+      const screenX = point.x * scale + activeGraphView.offsetX;
+      const screenY = point.y * scale + activeGraphView.offsetY;
+      if (screenX < viewportMinX || screenX > viewportMaxX || screenY < viewportMinY || screenY > viewportMaxY) {
+        continue;
+      }
+      const radius = Math.max(1, Math.min(4.2, point.radius * (0.9 + scale * 0.4)));
+      context.beginPath();
+      context.arc(screenX, screenY, radius, 0, Math.PI * 2);
+      context.fillStyle = point.color;
+      context.globalAlpha = point.alpha;
+      context.fill();
+    }
+    context.globalAlpha = 1;
+    context.restore();
+    drawMainGraphNodes(context, activeGraphScene.mainNodes, scale, radiusScale, fontScale);
+  }
 
   context.save();
   context.lineCap = "round";
-  if (drawLargeGraphEdges) {
+  if (
+    drawLargeGraphEdges &&
+    !graphDragState.dragging &&
+    (!activeGraphScene.largeGraphMode || visibleNodeIds)
+  ) {
     const edgeSource = activeGraphScene.largeGraphMode ? activeGraphScene.rawEdges : activeGraphScene.edges;
+    let drawnEdges = 0;
     for (let index = 0; index < edgeSource.length; index += edgeStride) {
       const edge = edgeSource[index];
       const sourceNode = activeGraphScene.largeGraphMode ? activeGraphScene.nodeById.get(edge.source) : edge.source;
       const targetNode = activeGraphScene.largeGraphMode ? activeGraphScene.nodeById.get(edge.target) : edge.target;
       if (!sourceNode || !targetNode) {
+        continue;
+      }
+      if (visibleNodeIds && (!visibleNodeIds.has(sourceNode.id) || !visibleNodeIds.has(targetNode.id))) {
         continue;
       }
       const sourceX = sourceNode.x * scale + activeGraphView.offsetX;
@@ -2387,46 +2798,63 @@ function drawGraphScene() {
         ? Math.max(0.08, width * Math.max(0.45, Math.min(scale, 1.4)))
         : Math.max(0.4, width * Math.max(0.5, Math.min(scale, 1.1)));
       context.stroke();
+      drawnEdges += 1;
+      if (activeGraphScene.largeGraphMode && drawnEdges >= LARGE_GRAPH_MAX_EDGE_DRAWS) {
+        break;
+      }
     }
   }
   context.restore();
 
-  for (const node of activeGraphScene.nodes) {
-    const screenX = node.x * scale + activeGraphView.offsetX;
-    const screenY = node.y * scale + activeGraphView.offsetY;
-    const radius = node.radius * radiusScale;
-    if (
-      screenX + radius < viewportMinX ||
-      screenX - radius > viewportMaxX ||
-      screenY + radius < viewportMinY ||
-      screenY - radius > viewportMaxY
-    ) {
-      continue;
+  if (!useOverviewLod && !useMidLod) {
+    for (const node of visibleNodes) {
+      const screenX = node.x * scale + activeGraphView.offsetX;
+      const screenY = node.y * scale + activeGraphView.offsetY;
+      const radius = node.radius * radiusScale;
+      if (
+        screenX + radius < viewportMinX ||
+        screenX - radius > viewportMaxX ||
+        screenY + radius < viewportMinY ||
+        screenY - radius > viewportMaxY
+      ) {
+        continue;
+      }
+      const hovered = node.id === activeGraphScene.hoverNodeId;
+      const isMainNode = activeGraphScene.mainNodeIds?.has(node.id);
+      if (activeGraphScene.largeGraphMode && !hovered && scale < 0.38) {
+        const pointSize = Math.max(1.35, Math.min(2.8, radius * 1.7));
+        context.fillStyle = node.color;
+        context.globalAlpha = node.opacity || 0.58;
+        context.fillRect(screenX - pointSize / 2, screenY - pointSize / 2, pointSize, pointSize);
+        continue;
+      }
+      context.beginPath();
+      context.arc(screenX, screenY, hovered ? radius + 1 : radius, 0, Math.PI * 2);
+      context.fillStyle = node.color;
+      context.globalAlpha = hovered ? 1 : node.opacity || 1;
+      context.fill();
+      context.globalAlpha = 1;
+      if (isMainNode && !hovered) {
+        continue;
+      }
+      if (!useDenseDirectMode || hovered || node.family === "repository" || node.degree >= 20) {
+        context.strokeStyle = hovered ? GRAPH_NODE_OUTLINE_HOVER_COLOR : node.strokeColor;
+        context.lineWidth = hovered ? Math.max(1.4, node.strokeWidth + 0.4) : node.strokeWidth;
+        context.stroke();
+      }
     }
-    const hovered = node.id === activeGraphScene.hoverNodeId;
-    context.beginPath();
-    context.arc(screenX, screenY, hovered ? radius + 1 : radius, 0, Math.PI * 2);
-    context.fillStyle = node.color;
-    context.globalAlpha = hovered ? 1 : node.opacity || 1;
-    context.fill();
-    context.globalAlpha = 1;
-    if (activeGraphScene.largeGraphMode && !hovered && scale < 0.38) {
-      continue;
-    }
-    context.strokeStyle = hovered ? "#0f172a" : node.strokeColor;
-    context.lineWidth = hovered ? Math.max(1.4, node.strokeWidth + 0.4) : node.strokeWidth;
-    context.stroke();
+    drawMainGraphNodes(context, activeGraphScene.mainNodes, scale, radiusScale, fontScale);
   }
   context.globalAlpha = 1;
 
   context.textAlign = "center";
   context.lineJoin = "round";
-  if (activeGraphScene.largeGraphMode && scale < LARGE_GRAPH_LABEL_VISIBILITY_SCALE) {
+  if (useOverviewLod || useMidLod || (activeGraphScene.largeGraphMode && scale < LARGE_GRAPH_LABEL_VISIBILITY_SCALE)) {
     return;
   }
   for (const label of activeGraphScene.labels) {
     const node = activeGraphScene.nodeById.get(label.id);
-    if (!node) {
+    if (!node || activeGraphScene.mainNodeIds?.has(node.id)) {
       continue;
     }
     const x = label.x * scale + activeGraphView.offsetX;
@@ -2434,17 +2862,15 @@ function drawGraphScene() {
     if (x < viewportMinX || x > viewportMaxX || y < viewportMinY || y > viewportMaxY) {
       continue;
     }
-    context.font = `${Math.max(8, Math.round(10 * fontScale))}px Inter, system-ui, sans-serif`;
-    context.lineWidth = 4;
-    context.strokeStyle = "rgba(255, 255, 255, 0.92)";
-    context.strokeText(label.text, x, y);
-    context.fillStyle = label.color;
-    context.fillText(label.text, x, y);
+    drawGraphNodeLabel(context, node, label.text, scale, radiusScale, fontScale);
   }
 }
 
 function findGraphHoverNode(screenX, screenY) {
   if (!activeGraphScene) {
+    return null;
+  }
+  if (activeGraphScene.largeGraphMode && activeGraphView.scale < LARGE_GRAPH_MID_LOD_SCALE) {
     return null;
   }
   if (activeGraphScene.totalNodes > LARGE_GRAPH_NODE_PICK_THRESHOLD && activeGraphView.scale < 0.22) {
@@ -2453,11 +2879,22 @@ function findGraphHoverNode(screenX, screenY) {
   const radiusScale = graphNodeZoomScale(activeGraphView.scale);
   let bestNode = null;
   let bestDistanceRatio = Number.POSITIVE_INFINITY;
-  for (let index = activeGraphScene.nodes.length - 1; index >= 0; index -= 1) {
-    const node = activeGraphScene.nodes[index];
+  const worldX = (screenX - activeGraphView.offsetX) / activeGraphView.scale;
+  const worldY = (screenY - activeGraphView.offsetY) / activeGraphView.scale;
+  const hitRadius = activeGraphScene.largeGraphMode ? 36 / activeGraphView.scale : 24 / activeGraphView.scale;
+  const candidates = activeGraphScene.largeGraphMode
+    ? graphVisibleNodes(activeGraphScene, {
+        minX: worldX - hitRadius,
+        maxX: worldX + hitRadius,
+        minY: worldY - hitRadius,
+        maxY: worldY + hitRadius,
+      })
+    : activeGraphScene.nodes;
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const node = candidates[index];
     const x = node.x * activeGraphView.scale + activeGraphView.offsetX;
     const y = node.y * activeGraphView.scale + activeGraphView.offsetY;
-    const radius = node.radius * radiusScale + 2;
+    const radius = Math.max(node.radius * radiusScale + 2, activeGraphScene.largeGraphMode ? 5 : 0);
     const dx = screenX - x;
     const dy = screenY - y;
     const distanceSq = dx * dx + dy * dy;
@@ -2474,7 +2911,7 @@ function findGraphHoverNode(screenX, screenY) {
 }
 
 function graphNodeZoomScale(scale) {
-  return Math.max(0.55, Math.min(1.06, 1 / Math.pow(scale, 0.23)));
+  return Math.max(0.8, Math.min(1.26, 1 / Math.pow(scale, 0.14)));
 }
 
 function placeClusterNodes(group, positions) {
@@ -2550,15 +2987,15 @@ function graphFamilyLabel(family) {
 
 function graphFamilyColor(family) {
   const colors = {
-    repository: "#8d98a6",
-    config: "#8f9aa6",
-    document: "#f28c38",
-    entity: "#a855f7",
-    logic: "#f28c38",
-    code: "#5fa6c9",
-    other: "#5fa6c9",
+    repository: "#c8d0f4",
+    config: "#95a4c0",
+    document: "#e0af68",
+    entity: "#bb9af7",
+    logic: "#f0c38a",
+    code: "#7dcfff",
+    other: "#79aac8",
   };
-  return colors[family] || "#5fa6c9";
+  return colors[family] || "#79aac8";
 }
 
 function escapeHtml(value) {
