@@ -40,10 +40,12 @@ const LARGE_GRAPH_MAX_EDGE_DRAWS = 6000;
 const LARGE_GRAPH_MAX_EDGE_VISIBLE_NODES = 3500;
 const LARGE_GRAPH_MAX_DIRECT_NODE_DRAWS = 5200;
 const LARGE_GRAPH_DENSE_DIRECT_NODE_THRESHOLD = 2400;
+const GRAPH_LAYOUT_SEED_WIDTH = 2800;
+const GRAPH_LAYOUT_SEED_HEIGHT = 1680;
 const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
 const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
 const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
-const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260616-graph-ratio1";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-relations1";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -1281,6 +1283,8 @@ async function renderGraphStage(payload, graphModel) {
     id: node.id,
     label: shortGraphLabel(node.label),
     color: node.color,
+    x: Number((node.x || 0).toFixed(3)),
+    y: Number((node.y || 0).toFixed(3)),
     size: Number(
       (
         node.radius *
@@ -1292,6 +1296,14 @@ async function renderGraphStage(payload, graphModel) {
               : hugeGraphMode
                 ? 3.15
                 : 3.38
+          : node.family === "directory"
+            ? smallGraphMode
+              ? 2.08
+              : mediumGraphMode
+                ? 2.5
+                : hugeGraphMode
+                  ? 2.72
+                  : 2.86
           : smallGraphMode
             ? 2.34
             : mediumGraphMode
@@ -1309,15 +1321,40 @@ async function renderGraphStage(payload, graphModel) {
     .map((edge) => {
       const sourceNode = graphModel.nodeMap.get(edge.source);
       const targetNode = graphModel.nodeMap.get(edge.target);
+      const relation = String(edge.label || "");
       const sameFamily = sourceNode && targetNode ? sourceNode.family === targetNode.family : false;
       const touchesRepository =
         sourceNode && targetNode ? sourceNode.family === "repository" || targetNode.family === "repository" : false;
-      const widthScale = smallGraphMode ? 1 : mediumGraphMode ? 0.88 : hugeGraphMode ? 0.52 : 0.66;
+      const touchesDirectory =
+        sourceNode && targetNode ? sourceNode.family === "directory" || targetNode.family === "directory" : false;
+      const structuralEdge = relation === "contains_dir";
+      const fileContainmentEdge = relation === "contains_file";
+      const widthScale = smallGraphMode ? 1 : mediumGraphMode ? 0.82 : hugeGraphMode ? 0.34 : 0.44;
       return {
         source: edge.source,
         target: edge.target,
-        color: sameFamily ? "rgba(126, 156, 196, 0.28)" : "rgba(91, 103, 125, 0.2)",
-        width: Number(((touchesRepository ? 0.082 : sameFamily ? 0.064 : 0.046) * widthScale).toFixed(4)),
+        color: structuralEdge
+          ? "rgba(108, 133, 168, 0.78)"
+          : fileContainmentEdge
+            ? "rgba(126, 156, 196, 0.76)"
+            : sameFamily
+              ? "rgba(126, 156, 196, 0.74)"
+              : "rgba(91, 103, 125, 0.7)",
+        width: Number(
+          (
+            (touchesRepository
+              ? structuralEdge
+                ? 0.03
+                : 0.022
+              : touchesDirectory
+                ? structuralEdge
+                  ? 0.026
+                  : 0.018
+                : sameFamily
+                  ? 0.02
+                  : 0.014) * widthScale
+          ).toFixed(4),
+        ),
       };
     });
 
@@ -1326,6 +1363,8 @@ async function renderGraphStage(payload, graphModel) {
       points: {
         pointIdBy: "id",
         pointLabelBy: "label",
+        pointXBy: "x",
+        pointYBy: "y",
         pointColorBy: "color",
         pointColorStrategy: "direct",
         pointSizeBy: "size",
@@ -1373,26 +1412,37 @@ async function renderGraphStage(payload, graphModel) {
     ...cosmographConfig,
     backgroundColor: "#f8fafc",
     pointOpacity: 0.94,
-    pointSizeScale: smallGraphMode ? 0.92 : mediumGraphMode ? 1.08 : hugeGraphMode ? 1.22 : 1.3,
+    pointSizeScale: smallGraphMode ? 0.92 : mediumGraphMode ? 1.08 : hugeGraphMode ? 1.16 : 1.22,
     pointSamplingDistance: 2,
     pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
     scalePointsOnZoom: false,
     renderLinks: true,
-    linkOpacity: largeGraphMode ? 0.8 : 0.86,
+    linkOpacity: largeGraphMode ? 0.75 : 0.82,
+    linkWidthScale: largeGraphMode ? 0.72 : 0.92,
+    scaleLinksOnZoom: false,
+    linkVisibilityDistanceRange: largeGraphMode ? [24, 110] : [52, 156],
+    linkVisibilityMinTransparency: largeGraphMode ? 0.25 : 0.46,
+    hoveredLinkWidthIncrease: largeGraphMode ? 1.5 : 3,
     renderHoveredPointRing: true,
     hoveredPointRingColor: GRAPH_NODE_OUTLINE_HOVER_COLOR,
     focusedPointRingColor: GRAPH_MAIN_NODE_OUTLINE_COLOR,
     fitViewOnInit: true,
     fitViewPadding: 0.08,
     fitViewDuration: 250,
+    simulationRepulsion: largeGraphMode ? 1.75 : 1.12,
+    simulationLinkDistance: largeGraphMode ? 18 : 12,
+    simulationLinkSpring: largeGraphMode ? 0.45 : 0.9,
+    simulationGravity: largeGraphMode ? 0.03 : 0.2,
+    simulationCenter: largeGraphMode ? 0.04 : 0.08,
+    simulationDecay: largeGraphMode ? 2400 : 3800,
     enableSimulationDuringZoom: false,
     enableDrag: false,
-    spaceSize: 8192,
+    spaceSize: hugeGraphMode ? 16384 : largeGraphMode ? 12288 : 8192,
     randomSeed: payload.topic_name,
     showTopLabels: true,
-    showTopLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 18 : 28,
+    showTopLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 14 : 28,
     showDynamicLabels: true,
-    showDynamicLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 14 : 22,
+    showDynamicLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 10 : 22,
     showLabelsFor: mainNodeIds,
     showHoveredPointLabel: true,
     onGraphRebuilt: () => {
@@ -1402,7 +1452,7 @@ async function renderGraphStage(payload, graphModel) {
       activeGraphSettleTimer = window.setTimeout(() => {
         activeGraphSettleTimer = null;
         activeCosmograph?.stop?.();
-      }, 900);
+      }, largeGraphMode ? 700 : 900);
     },
     onPointClick: (index) => {
       activeCosmograph?.zoomToPoint(index, 220, Math.max(activeCosmograph?.getZoomLevel?.() || 1, 1.6), true);
@@ -1919,10 +1969,10 @@ function buildGraphModel(payload) {
           ),
         )
       : Math.max(
-          family === "document" || family === "config" ? 4.2 : 5.2,
+          family === "document" || family === "config" ? 4.2 : family === "directory" ? 4.8 : 5.2,
           Math.min(
-            family === "repository" ? 17 : family === "document" || family === "config" ? 10.8 : 13.2,
-            (family === "repository" ? 10.8 + Math.sqrt(degree + 1) * 1.85 : 5.2 + Math.sqrt(degree + 1) * 1.55) *
+            family === "repository" ? 17 : family === "directory" ? 11.8 : family === "document" || family === "config" ? 10.8 : 13.2,
+            (family === "repository" ? 10.8 + Math.sqrt(degree + 1) * 1.85 : family === "directory" ? 6.2 + Math.sqrt(degree + 1) * 1.3 : 5.2 + Math.sqrt(degree + 1) * 1.55) *
               layoutScale,
           ),
         );
@@ -1933,8 +1983,8 @@ function buildGraphModel(payload) {
       familyLabel: graphFamilyLabel(family),
       color,
       strokeColor: GRAPH_NODE_OUTLINE_COLOR,
-      strokeWidth: largeGraphMode ? 0.35 : degree >= 10 ? 1.6 : 1.05,
-      opacity: largeGraphMode ? (family === "repository" ? 0.88 : degree >= 10 ? 0.62 : 0.46) : 1,
+      strokeWidth: largeGraphMode ? 0.32 : degree >= 10 ? 1.6 : 1.05,
+      opacity: largeGraphMode ? (family === "repository" ? 0.9 : family === "directory" ? 0.7 : degree >= 10 ? 0.62 : 0.46) : 1,
       radius,
     };
   });
@@ -1965,18 +2015,26 @@ function buildGraphModel(payload) {
           isLargeGroup
             ? group.family === "document" || group.family === "config"
               ? 17.5
+              : group.family === "directory"
+                ? 15.2
               : 13.5
             : group.family === "document" || group.family === "config"
               ? 7.4
+              : group.family === "directory"
+                ? 6.1
               : 5.6,
           1 +
             Math.sqrt(group.nodes.length) /
               (isLargeGroup
                 ? group.family === "document" || group.family === "config"
                   ? 1.85
+                  : group.family === "directory"
+                    ? 2.05
                   : 2.45
                 : group.family === "document" || group.family === "config"
                   ? 3.35
+                  : group.family === "directory"
+                    ? 3.9
                   : 4.8),
         ),
       );
@@ -1985,11 +2043,42 @@ function buildGraphModel(payload) {
     .sort((a, b) => b.nodes.length - a.nodes.length || b.nodes[0].degree - a.nodes[0].degree);
 
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const edges = (payload.edges || [])
+    .filter((edge) => nodeMap.has(edge.source) && nodeMap.has(edge.target))
+    .map((edge) => ({
+      source: edge.source,
+      target: edge.target,
+      label: edge.label || "",
+    }));
   nodes.sort((a, b) => b.degree - a.degree || a.label.localeCompare(b.label));
   nodes.forEach((node, index) => {
     node.layoutIndex = index;
   });
-  return { nodes, groups, nodeMap, totalNodes, layoutScale };
+  const seededPositions = seedGraphNodePositions(nodes, edges, nodeMap, groups, totalNodes);
+  nodes.forEach((node) => {
+    const point = seededPositions.get(node.id);
+    node.x = point?.x ?? 0;
+    node.y = point?.y ?? 0;
+  });
+  return { nodes, groups, nodeMap, edges, totalNodes, layoutScale };
+}
+
+function seedGraphNodePositions(nodes, edges, nodeMap, groups, totalNodes) {
+  const width = totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? GRAPH_LAYOUT_SEED_WIDTH * 1.2 : GRAPH_LAYOUT_SEED_WIDTH;
+  const height = totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? GRAPH_LAYOUT_SEED_HEIGHT * 1.15 : GRAPH_LAYOUT_SEED_HEIGHT;
+  const positions = new Map();
+
+  assignGraphGroupCenters(groups, width, height);
+  for (const group of groups) {
+    placeClusterNodes(group, positions);
+  }
+  if (totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD) {
+    spreadLargeGraphPositions(nodes, positions, groups);
+  }
+  relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, height);
+  separateOverlappingGraphNodes(nodes, positions);
+  normalizeGraphPositions(groups, positions, width, height);
+  return positions;
 }
 
 function assignGraphGroupCenters(groups, width, height) {
@@ -2008,8 +2097,8 @@ function assignGraphGroupCenters(groups, width, height) {
   }
 
   const totalWeight = others.reduce((sum, group) => sum + Math.max(group.nodes.length, 1), 0);
-  const orbitX = Math.max(230, Math.min(width * 0.3, 310 + others.length * 24));
-  const orbitY = Math.max(150, Math.min(height * 0.27, 190 + others.length * 18));
+  const orbitX = Math.max(320, Math.min(width * 0.38, 420 + others.length * 34));
+  const orbitY = Math.max(210, Math.min(height * 0.34, 270 + others.length * 26));
   let cursor = -Math.PI / 2;
 
   others.forEach((group) => {
@@ -2063,7 +2152,13 @@ function spreadLargeGraphPositions(nodes, positions, groups) {
     const jitter = hashStringUnit(node.id);
     const angle = rank * 2.399963229728653 + jitter * 0.9;
     const familySpread =
-      node.family === "document" || node.family === "config" ? 11.2 : node.family === "code" ? 9.8 : 8.1;
+      node.family === "document" || node.family === "config"
+        ? 11.2
+        : node.family === "directory"
+          ? 12.4
+          : node.family === "code"
+            ? 9.8
+            : 8.1;
     const shell = Math.pow(rank + 1, 0.42) * familySpread;
     const lobe = 0.74 + hashStringUnit(`${node.id}:lobe`) * 0.62;
     const skew = node.family === "code" ? 0.8 : 0.9;
@@ -2153,7 +2248,7 @@ function buildGraphOverviewNodes(nodes) {
     });
   }
   overviewNodes.sort((left, right) => {
-    const familyPriority = { repository: 0, code: 1, config: 2, document: 3, entity: 4 };
+    const familyPriority = { repository: 0, directory: 1, code: 2, config: 3, document: 4, entity: 5 };
     return (
       (familyPriority[left.family] ?? 5) - (familyPriority[right.family] ?? 5) ||
       left.rank - right.rank ||
@@ -2206,7 +2301,7 @@ function buildVisibleGraphLodPoints(nodes, scale) {
     });
   }
   points.sort((left, right) => {
-    const familyPriority = { repository: 0, code: 1, config: 2, document: 3, entity: 4 };
+    const familyPriority = { repository: 0, directory: 1, code: 2, config: 3, document: 4, entity: 5 };
     return (
       (familyPriority[left.family] ?? 5) - (familyPriority[right.family] ?? 5) ||
       left.rank - right.rank ||
@@ -2322,7 +2417,7 @@ function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, he
       const cellY = Math.floor(posA.y / cellSize);
       for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
         for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-          const nearby = buckets.get(`${cellX + offsetX}:${cellY + offsetY}`) || [];
+      const nearby = buckets.get(`${cellX + offsetX}:${cellY + offsetY}`) || [];
           for (const other of nearby) {
             if (other.layoutIndex <= node.layoutIndex) {
               continue;
@@ -2335,10 +2430,12 @@ function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, he
             const sameFamily = node.family === other.family;
             const repulsionBase = sameFamily
               ? node.family === "document" || node.family === "config"
-                ? 13200
-                : 6800
-              : 3600;
-            const repulsion = Math.min(repulsionBase / distanceSq, sameFamily ? 18 : 10);
+                ? 18800
+                : node.family === "directory"
+                  ? 12400
+                  : 9200
+              : 5200;
+            const repulsion = Math.min(repulsionBase / distanceSq, sameFamily ? 24 : 13);
             const forceX = (dx / distance) * repulsion;
             const forceY = (dy / distance) * repulsion;
             displacements.get(node.id).x += forceX;
@@ -2363,8 +2460,35 @@ function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, he
       const distance = Math.sqrt(dx * dx + dy * dy) || 1;
       const sameFamily = sourceNode.family === targetNode.family;
       const touchesRepository = sourceNode.family === "repository" || targetNode.family === "repository";
-      const preferred = touchesRepository ? 245 : sameFamily ? (sourceNode.family === "document" || sourceNode.family === "config" ? 126 : 88) : 168;
-      const pull = (distance - preferred) * (touchesRepository ? 0.0015 : sameFamily ? 0.0052 : 0.0024);
+      const touchesDirectory = sourceNode.family === "directory" || targetNode.family === "directory";
+      const relation = String(edge.label || "");
+      const preferred =
+        relation === "contains_dir"
+          ? touchesRepository
+            ? 198
+            : 148
+          : relation === "contains_file"
+            ? touchesDirectory
+              ? 102
+              : 132
+            : touchesRepository
+              ? 228
+              : sameFamily
+                ? sourceNode.family === "document" || sourceNode.family === "config"
+                  ? 142
+                  : 104
+                : 176;
+      const pull =
+        (distance - preferred) *
+        (relation === "contains_dir"
+          ? 0.006
+          : relation === "contains_file"
+            ? 0.0072
+            : touchesRepository
+              ? 0.0022
+              : sameFamily
+                ? 0.0058
+                : 0.0028);
       const forceX = (dx / distance) * pull;
       const forceY = (dy / distance) * pull;
       displacements.get(sourceNode.id).x += forceX;
@@ -2380,10 +2504,12 @@ function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, he
       const point = positions.get(node.id);
       const gravity =
         node.family === "repository"
-          ? 0.038
+          ? 0.03
+          : node.family === "directory"
+            ? 0.005
           : node.family === "document" || node.family === "config"
-            ? 0.0045
-            : 0.012;
+            ? 0.0032
+            : 0.008;
       displacement.x += (group.cx - point.x) * gravity;
       displacement.y += (group.cy - point.y) * gravity;
     }
@@ -2946,11 +3072,18 @@ function placeClusterNodes(group, positions) {
       const rank = index;
       const jitter = hashStringUnit(node.id);
       angle = rank * 2.099963229728653 + jitter * Math.PI;
-      const familyBase = group.family === "document" || group.family === "config" ? 24 : group.family === "code" ? 22 : 19;
+      const familyBase =
+        group.family === "document" || group.family === "config"
+          ? 24
+          : group.family === "directory"
+            ? 26
+            : group.family === "code"
+              ? 22
+              : 19;
       const shell = Math.sqrt(rank) * familyBase * group.spreadScale;
       const lobe = 0.72 + hashStringUnit(`${node.id}:lobe`) * 0.72;
-      radiusX = shell * lobe * (group.family === "document" || group.family === "config" ? 1.18 : 1.0);
-      radiusY = shell * (0.64 + hashStringUnit(`${node.id}:y`) * 0.54);
+      radiusX = shell * lobe * (group.family === "document" || group.family === "config" ? 1.18 : group.family === "directory" ? 1.1 : 1.0);
+      radiusY = shell * (group.family === "directory" ? 0.82 : 0.64 + hashStringUnit(`${node.id}:y`) * 0.54);
     }
     positions.set(node.id, {
       x: group.cx + Math.cos(angle) * radiusX,
@@ -2971,6 +3104,7 @@ function hashStringUnit(value) {
 function graphFamily(value) {
   const text = String(value || "").toLowerCase();
   if (text.includes("repository") || text.includes("repo")) return "repository";
+  if (text.includes("directory") || text.includes("folder")) return "directory";
   if (text.includes("config") || text.includes("cmake") || text.includes("yaml") || text.includes("yml") || text.includes("toml") || text.includes("json")) return "config";
   if (text.includes("document") || text.includes("readme") || text.includes("markdown") || text.includes("md")) return "document";
   if (text.includes("class") || text.includes("entity") || text.includes("struct")) return "entity";
@@ -2982,6 +3116,7 @@ function graphFamily(value) {
 function graphFamilyLabel(family) {
   const labels = {
     repository: "Repository",
+    directory: "Directories",
     config: "Config",
     document: "Documents",
     entity: "Entities",
@@ -2995,6 +3130,7 @@ function graphFamilyLabel(family) {
 function graphFamilyColor(family) {
   const colors = {
     repository: "#c8d0f4",
+    directory: "#94a3b8",
     config: "#95a4c0",
     document: "#e0af68",
     entity: "#bb9af7",

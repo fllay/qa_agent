@@ -69,12 +69,16 @@ def build_fallback_graph(topic_dir: Path, source_dir: Path) -> Path:
     topic_dir.mkdir(parents=True, exist_ok=True)
     nodes: list[dict] = []
     edges: list[dict] = []
+    seen_node_ids: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
 
     repo_dirs = [path for path in source_dir.iterdir() if path.is_dir() and not _is_ignored_path(path)]
     for repo_dir in sorted(repo_dirs):
         repo_node_id = f"repo::{repo_dir.name}"
         repo_summary = _repo_summary(repo_dir)
-        nodes.append(
+        _append_node(
+            nodes,
+            seen_node_ids,
             {
                 "id": repo_node_id,
                 "label": repo_dir.name,
@@ -82,14 +86,17 @@ def build_fallback_graph(topic_dir: Path, source_dir: Path) -> Path:
                 "path": str(repo_dir),
                 "summary": repo_summary,
                 "text": f"Repository {repo_dir.name}. {repo_summary}",
-            }
+            },
         )
 
         for file_path in _select_files(repo_dir):
             rel_path = file_path.relative_to(repo_dir)
+            parent_node_id = _ensure_directory_chain(repo_dir, rel_path, nodes, edges, seen_node_ids, seen_edges)
             node_id = f"file::{repo_dir.name}::{rel_path.as_posix()}"
             snippet = _read_snippet(file_path)
-            nodes.append(
+            _append_node(
+                nodes,
+                seen_node_ids,
                 {
                     "id": node_id,
                     "label": rel_path.as_posix(),
@@ -100,9 +107,9 @@ def build_fallback_graph(topic_dir: Path, source_dir: Path) -> Path:
                         f"Repository {repo_dir.name}. File {rel_path.as_posix()}. "
                         f"Content snippet: {snippet}"
                     ),
-                }
+                },
             )
-            edges.append({"source": repo_node_id, "target": node_id, "relation": "contains"})
+            _append_edge(edges, seen_edges, parent_node_id, node_id, "contains_file")
 
     graph_path = topic_dir / "fallback-graph.json"
     graph_path.write_text(json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=False), encoding="utf-8")
@@ -174,6 +181,64 @@ def _file_type(path: Path) -> str:
     if suffix in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf"}:
         return "config"
     return "code"
+
+
+def _ensure_directory_chain(
+    repo_dir: Path,
+    rel_path: Path,
+    nodes: list[dict],
+    edges: list[dict],
+    seen_node_ids: set[str],
+    seen_edges: set[tuple[str, str, str]],
+) -> str:
+    repo_node_id = f"repo::{repo_dir.name}"
+    parent_node_id = repo_node_id
+    current_parts: list[str] = []
+
+    for part in rel_path.parent.parts:
+        if part in {"", "."}:
+            continue
+        current_parts.append(part)
+        dir_rel = "/".join(current_parts)
+        dir_node_id = f"dir::{repo_dir.name}::{dir_rel}"
+        _append_node(
+            nodes,
+            seen_node_ids,
+            {
+                "id": dir_node_id,
+                "label": dir_rel,
+                "type": "directory",
+                "path": str(repo_dir / Path(*current_parts)),
+                "summary": f"{repo_dir.name} directory {dir_rel}",
+                "text": f"Repository {repo_dir.name}. Directory {dir_rel}. Contains related files and subdirectories.",
+            },
+        )
+        _append_edge(edges, seen_edges, parent_node_id, dir_node_id, "contains_dir")
+        parent_node_id = dir_node_id
+
+    return parent_node_id
+
+
+def _append_node(nodes: list[dict], seen_node_ids: set[str], payload: dict) -> None:
+    node_id = str(payload["id"])
+    if node_id in seen_node_ids:
+        return
+    seen_node_ids.add(node_id)
+    nodes.append(payload)
+
+
+def _append_edge(
+    edges: list[dict],
+    seen_edges: set[tuple[str, str, str]],
+    source: str,
+    target: str,
+    relation: str,
+) -> None:
+    key = (source, target, relation)
+    if key in seen_edges:
+        return
+    seen_edges.add(key)
+    edges.append({"source": source, "target": target, "relation": relation})
 
 
 def _is_ignored_path(path: Path) -> bool:

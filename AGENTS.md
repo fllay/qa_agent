@@ -8,6 +8,12 @@
 
 # Change Log
 
+## 2026-06-18
+
+- Raised large-graph Cosmograph link visibility again by setting the large-graph global link opacity to `0.75`, reducing the large-graph minimum fade-out transparency so lines remain readable while zoomed out, and increasing the per-link RGBA alpha values used by directory/file containment edges.
+- Compared the local graph-renderer files against the deployed `192.168.168.98:/home/user/qa_agent` checkout, confirmed the server was still on an older graph viewer/fallback-graph implementation, uploaded the newer local `chat.js`, `chat.html`, `fallback_graph.py`, related fallback-graph tests, and `AGENTS.md`, then rebuilt the `qa_agent-qa-agent` Docker service so the server now matches local hashes and serves the `20260618-graph-relations1` asset version.
+- Reworked the large fallback-graph topology for the graph modal so repository previews no longer degenerate into a single repo-to-file star: fallback graphs now add real directory nodes plus `contains_dir` and `contains_file` hierarchy edges, and the Cosmograph frontend now seeds node `x/y` positions from the relation graph, reduces large-graph link weight/opacity, and increases spacing so dense repository graphs spread according to actual structure instead of collapsing into a thick circular hub.
+
 ## 2026-06-16
 
 - Diagnosed a local runtime confusion where the QA Agent app was already running in Docker on port `8000` (`qa_agent-qa-agent-1`), so extra Uvicorn launches failed with `WinError 10048`; verified the container serves `/chat` successfully via `http://localhost:8000/chat`, while ad hoc checks against `127.0.0.1:8000` were less reliable on this Windows/Docker setup and ports `8010`/`8011` were not active listeners.
