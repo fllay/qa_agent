@@ -45,7 +45,7 @@ const GRAPH_LAYOUT_SEED_HEIGHT = 1680;
 const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
 const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
 const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
-const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-relations1";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light2";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -1279,7 +1279,20 @@ async function renderGraphStage(payload, graphModel) {
     }
   }
   const mainNodeIds = mainNodes.map((node) => node.id);
-  const pointRows = nodes.map((node) => ({
+  const renderNodes = [...nodes].sort((left, right) => {
+    const priorityDelta = graphNodeRenderPriority(left) - graphNodeRenderPriority(right);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    if (left.degree !== right.degree) {
+      return left.degree - right.degree;
+    }
+    if (left.radius !== right.radius) {
+      return left.radius - right.radius;
+    }
+    return left.label.localeCompare(right.label);
+  });
+  const pointRows = renderNodes.map((node) => ({
     id: node.id,
     label: shortGraphLabel(node.label),
     color: node.color,
@@ -1329,32 +1342,22 @@ async function renderGraphStage(payload, graphModel) {
         sourceNode && targetNode ? sourceNode.family === "directory" || targetNode.family === "directory" : false;
       const structuralEdge = relation === "contains_dir";
       const fileContainmentEdge = relation === "contains_file";
-      const widthScale = smallGraphMode ? 1 : mediumGraphMode ? 0.82 : hugeGraphMode ? 0.34 : 0.44;
+      const structuralAlpha = largeGraphMode ? 0.38 : smallGraphMode ? 0.62 : 0.52;
+      const fileAlpha = largeGraphMode ? 0.32 : smallGraphMode ? 0.56 : 0.46;
+      const sameAlpha = largeGraphMode ? 0.28 : smallGraphMode ? 0.52 : 0.42;
+      const crossAlpha = largeGraphMode ? 0.24 : smallGraphMode ? 0.48 : 0.38;
+      const width = largeGraphMode ? 0.011 : mediumGraphMode ? 0.016 : 0.02;
       return {
         source: edge.source,
         target: edge.target,
         color: structuralEdge
-          ? "rgba(108, 133, 168, 0.78)"
+          ? `rgba(108, 133, 168, ${structuralAlpha})`
           : fileContainmentEdge
-            ? "rgba(126, 156, 196, 0.76)"
+            ? `rgba(126, 156, 196, ${fileAlpha})`
             : sameFamily
-              ? "rgba(126, 156, 196, 0.74)"
-              : "rgba(91, 103, 125, 0.7)",
-        width: Number(
-          (
-            (touchesRepository
-              ? structuralEdge
-                ? 0.03
-                : 0.022
-              : touchesDirectory
-                ? structuralEdge
-                  ? 0.026
-                  : 0.018
-                : sameFamily
-                  ? 0.02
-                  : 0.014) * widthScale
-          ).toFixed(4),
-        ),
+              ? `rgba(126, 156, 196, ${sameAlpha})`
+              : `rgba(91, 103, 125, ${crossAlpha})`,
+        width: Number(width.toFixed(4)),
       };
     });
 
@@ -1405,57 +1408,85 @@ async function renderGraphStage(payload, graphModel) {
     totalNodes: graphModel.totalNodes,
     totalEdges: linkRows.length,
     mainNodeIds: new Set(mainNodeIds),
+    selectedPointIndex: null,
   };
   activeCosmograph = new Cosmograph(host, {
     points,
     links,
     ...cosmographConfig,
-    backgroundColor: "#f8fafc",
-    pointOpacity: 0.94,
+    backgroundColor: "#f4f7fb",
+    pointOpacity: 0.97,
     pointSizeScale: smallGraphMode ? 0.92 : mediumGraphMode ? 1.08 : hugeGraphMode ? 1.16 : 1.22,
     pointSamplingDistance: 2,
     pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
     scalePointsOnZoom: false,
     renderLinks: true,
-    linkOpacity: largeGraphMode ? 0.75 : 0.82,
-    linkWidthScale: largeGraphMode ? 0.72 : 0.92,
+    linkOpacity: largeGraphMode ? 0.82 : 0.84,
+    linkWidthScale: 1,
     scaleLinksOnZoom: false,
-    linkVisibilityDistanceRange: largeGraphMode ? [24, 110] : [52, 156],
-    linkVisibilityMinTransparency: largeGraphMode ? 0.25 : 0.46,
-    hoveredLinkWidthIncrease: largeGraphMode ? 1.5 : 3,
+    linkVisibilityDistanceRange: largeGraphMode ? [32, 132] : [64, 184],
+    linkVisibilityMinTransparency: largeGraphMode ? 0.72 : 0.42,
+    hoveredLinkWidthIncrease: largeGraphMode ? 1.2 : 2.2,
+    pointGreyoutOpacity: 0.16,
+    linkGreyoutOpacity: 0.12,
     renderHoveredPointRing: true,
     hoveredPointRingColor: GRAPH_NODE_OUTLINE_HOVER_COLOR,
     focusedPointRingColor: GRAPH_MAIN_NODE_OUTLINE_COLOR,
     fitViewOnInit: true,
     fitViewPadding: 0.08,
     fitViewDuration: 250,
-    simulationRepulsion: largeGraphMode ? 1.75 : 1.12,
-    simulationLinkDistance: largeGraphMode ? 18 : 12,
-    simulationLinkSpring: largeGraphMode ? 0.45 : 0.9,
-    simulationGravity: largeGraphMode ? 0.03 : 0.2,
-    simulationCenter: largeGraphMode ? 0.04 : 0.08,
-    simulationDecay: largeGraphMode ? 2400 : 3800,
+    simulationRepulsion: largeGraphMode ? 2.05 : mediumGraphMode ? 1.38 : 1.16,
+    simulationLinkDistance: largeGraphMode ? 24 : mediumGraphMode ? 16 : 12,
+    simulationLinkSpring: largeGraphMode ? 0.32 : mediumGraphMode ? 0.58 : 0.82,
+    simulationGravity: largeGraphMode ? 0.018 : mediumGraphMode ? 0.08 : 0.18,
+    simulationCenter: largeGraphMode ? 0.022 : mediumGraphMode ? 0.045 : 0.08,
+    simulationDecay: largeGraphMode ? 1200 : mediumGraphMode ? 1700 : 2400,
     enableSimulationDuringZoom: false,
     enableDrag: false,
     spaceSize: hugeGraphMode ? 16384 : largeGraphMode ? 12288 : 8192,
     randomSeed: payload.topic_name,
     showTopLabels: true,
-    showTopLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 14 : 28,
+    showTopLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 10 : 20,
     showDynamicLabels: true,
-    showDynamicLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 10 : 22,
+    showDynamicLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 6 : 14,
     showLabelsFor: mainNodeIds,
     showHoveredPointLabel: true,
+    showFocusedPointLabel: true,
+    showUnselectedPointLabels: false,
+    showSelectedLabels: true,
+    selectedPointLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 18 : 26,
     onGraphRebuilt: () => {
       if (activeGraphSettleTimer) {
         window.clearTimeout(activeGraphSettleTimer);
       }
       activeGraphSettleTimer = window.setTimeout(() => {
         activeGraphSettleTimer = null;
+        const pinnedIndices = mainNodeIds
+          .map((id) => pointIndexById.get(id))
+          .filter((index) => Number.isInteger(index));
+        if (pinnedIndices.length) {
+          activeCosmograph?.setPinnedPoints?.(pinnedIndices);
+        }
         activeCosmograph?.stop?.();
-      }, largeGraphMode ? 700 : 900);
+      }, largeGraphMode ? 420 : mediumGraphMode ? 520 : 680);
     },
     onPointClick: (index) => {
-      activeCosmograph?.zoomToPoint(index, 220, Math.max(activeCosmograph?.getZoomLevel?.() || 1, 1.6), true);
+      if (activeGraphScene?.selectedPointIndex === index) {
+        activeGraphScene.selectedPointIndex = null;
+        activeCosmograph?.unselectAllPoints?.();
+        activeCosmograph?.setFocusedPoint?.();
+        return;
+      }
+      activeGraphScene.selectedPointIndex = index;
+      activeCosmograph?.unselectAllPoints?.();
+      activeCosmograph?.selectPoint?.(index, false, true);
+      activeCosmograph?.setFocusedPoint?.(index);
+      activeCosmograph?.zoomToPoint(
+        index,
+        220,
+        Math.max(activeCosmograph?.getZoomLevel?.() || 1, largeGraphMode ? 1.16 : mediumGraphMode ? 1.28 : 1.44),
+        true,
+      );
     },
   });
 
@@ -1466,6 +1497,9 @@ async function renderGraphStage(payload, graphModel) {
       }
       const action = button.dataset.graphZoom;
       if (action === "reset") {
+        activeGraphScene.selectedPointIndex = null;
+        activeCosmograph.unselectAllPoints?.();
+        activeCosmograph.setFocusedPoint?.();
         activeCosmograph.fitView(220, 0.08);
         return;
       }
@@ -2067,51 +2101,154 @@ function seedGraphNodePositions(nodes, edges, nodeMap, groups, totalNodes) {
   const width = totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? GRAPH_LAYOUT_SEED_WIDTH * 1.2 : GRAPH_LAYOUT_SEED_WIDTH;
   const height = totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? GRAPH_LAYOUT_SEED_HEIGHT * 1.15 : GRAPH_LAYOUT_SEED_HEIGHT;
   const positions = new Map();
+  const adjacency = buildGraphAdjacency(nodes, edges);
+  const components = buildGraphComponents(nodes, adjacency);
 
-  assignGraphGroupCenters(groups, width, height);
-  for (const group of groups) {
-    placeClusterNodes(group, positions);
+  assignGraphComponentCenters(components, width, height);
+  for (const component of components) {
+    seedGraphComponentPositions(component, adjacency, positions);
   }
-  if (totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD) {
-    spreadLargeGraphPositions(nodes, positions, groups);
-  }
-  relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, height);
+  relaxGraphPositions(nodes, edges, positions, nodeMap, adjacency, components, width, height);
   separateOverlappingGraphNodes(nodes, positions);
-  normalizeGraphPositions(groups, positions, width, height);
+  normalizeGraphPositions(positions, width, height);
   return positions;
 }
 
-function assignGraphGroupCenters(groups, width, height) {
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const repositoryGroup = groups.find((group) => group.family === "repository");
-  const others = groups.filter((group) => group.family !== "repository");
+function buildGraphAdjacency(nodes, edges) {
+  const adjacency = new Map(nodes.map((node) => [node.id, new Set()]));
+  for (const edge of edges) {
+    adjacency.get(edge.source)?.add(edge.target);
+    adjacency.get(edge.target)?.add(edge.source);
+  }
+  return adjacency;
+}
 
-  if (repositoryGroup) {
-    repositoryGroup.cx = centerX - 30;
-    repositoryGroup.cy = centerY + 10;
+function buildGraphComponents(nodes, adjacency) {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const remaining = new Set(nodes.map((node) => node.id));
+  const components = [];
+
+  while (remaining.size) {
+    const startId = remaining.values().next().value;
+    const queue = [startId];
+    const componentIds = [];
+    remaining.delete(startId);
+    for (let index = 0; index < queue.length; index += 1) {
+      const currentId = queue[index];
+      componentIds.push(currentId);
+      for (const neighborId of adjacency.get(currentId) || []) {
+        if (!remaining.has(neighborId)) {
+          continue;
+        }
+        remaining.delete(neighborId);
+        queue.push(neighborId);
+      }
+    }
+
+    const componentNodes = componentIds
+      .map((id) => nodeMap.get(id))
+      .filter(Boolean)
+      .sort((left, right) => right.degree - left.degree || left.label.localeCompare(right.label));
+    if (!componentNodes.length) {
+      continue;
+    }
+    components.push({
+      id: componentNodes[0].id,
+      hubId: componentNodes[0].id,
+      nodes: componentNodes,
+      weight: componentNodes.reduce((sum, node) => sum + Math.max(node.degree, 1), 0),
+      cx: 0,
+      cy: 0,
+    });
   }
 
-  if (!others.length) {
+  components.sort((left, right) => right.nodes.length - left.nodes.length || right.weight - left.weight);
+  return components;
+}
+
+function assignGraphComponentCenters(components, width, height) {
+  const centerX = width / 2;
+  const centerY = height / 2;
+  if (!components.length) {
+    return;
+  }
+  if (components.length === 1) {
+    components[0].cx = centerX;
+    components[0].cy = centerY;
     return;
   }
 
-  const totalWeight = others.reduce((sum, group) => sum + Math.max(group.nodes.length, 1), 0);
-  const orbitX = Math.max(320, Math.min(width * 0.38, 420 + others.length * 34));
-  const orbitY = Math.max(210, Math.min(height * 0.34, 270 + others.length * 26));
+  const totalWeight = components.reduce((sum, component) => sum + Math.max(component.nodes.length, 1), 0);
+  const orbitX = Math.max(260, Math.min(width * 0.34, 360 + components.length * 28));
+  const orbitY = Math.max(180, Math.min(height * 0.28, 240 + components.length * 20));
   let cursor = -Math.PI / 2;
 
-  others.forEach((group) => {
-    const slice = (Math.max(group.nodes.length, 1) / totalWeight) * Math.PI * 2;
-    const angle = cursor + slice / 2 + (hashStringUnit(group.family) - 0.5) * 0.22;
-    const familyBiasY = group.family === "document" ? -34 : group.family === "repository" ? 16 : 0;
-    group.cx = centerX + Math.cos(angle) * orbitX;
-    group.cy = centerY + Math.sin(angle) * orbitY + familyBiasY;
+  components.forEach((component, index) => {
+    const slice = (Math.max(component.nodes.length, 1) / totalWeight) * Math.PI * 2;
+    const angle = cursor + slice / 2 + (hashStringUnit(component.id) - 0.5) * 0.26;
+    const biasY = index === 0 ? 0 : (hashStringUnit(`${component.id}:y`) - 0.5) * 44;
+    component.cx = centerX + Math.cos(angle) * orbitX;
+    component.cy = centerY + Math.sin(angle) * orbitY + biasY;
     cursor += slice;
   });
 }
 
-function normalizeGraphPositions(groups, positions, width, height) {
+function seedGraphComponentPositions(component, adjacency, positions) {
+  if (!component.nodes.length) {
+    return;
+  }
+  const hubId = component.hubId;
+  const hubNode = component.nodes[0];
+  positions.set(hubId, { x: component.cx, y: component.cy });
+
+  const queue = [hubId];
+  const visited = new Set([hubId]);
+  const depthById = new Map([[hubId, 0]]);
+  const shellIndexByDepth = new Map();
+
+  while (queue.length) {
+    const currentId = queue.shift();
+    const currentDepth = depthById.get(currentId) || 0;
+    for (const neighborId of adjacency.get(currentId) || []) {
+      if (visited.has(neighborId)) {
+        continue;
+      }
+      visited.add(neighborId);
+      depthById.set(neighborId, currentDepth + 1);
+      queue.push(neighborId);
+    }
+  }
+
+  for (const node of component.nodes) {
+    if (positions.has(node.id)) {
+      continue;
+    }
+    const depth = depthById.get(node.id) ?? 0;
+    const shellIndex = shellIndexByDepth.get(depth) || 0;
+    shellIndexByDepth.set(depth, shellIndex + 1);
+    const neighbors = [...(adjacency.get(node.id) || [])]
+      .map((id) => positions.get(id))
+      .filter(Boolean);
+    const anchor = neighbors.length
+      ? {
+          x: neighbors.reduce((sum, point) => sum + point.x, 0) / neighbors.length,
+          y: neighbors.reduce((sum, point) => sum + point.y, 0) / neighbors.length,
+        }
+      : { x: component.cx, y: component.cy };
+    const angle = shellIndex * 2.399963229728653 + hashStringUnit(node.id) * Math.PI * 2;
+    const radial = Math.max(26, depth * 34 + Math.sqrt(shellIndex + 1) * 12);
+    positions.set(node.id, {
+      x: anchor.x + Math.cos(angle) * radial,
+      y: anchor.y + Math.sin(angle) * radial,
+    });
+  }
+
+  if (component.nodes.length === 1 && !positions.has(hubNode.id)) {
+    positions.set(hubNode.id, { x: component.cx, y: component.cy });
+  }
+}
+
+function normalizeGraphPositions(positions, width, height) {
   const paddingX = 96;
   const paddingY = 72;
   const points = [...positions.values()];
@@ -2133,39 +2270,6 @@ function normalizeGraphPositions(groups, positions, width, height) {
       y: point.y * scale + offsetY,
     });
   });
-
-  groups.forEach((group) => {
-    group.cx = group.cx * scale + offsetX;
-    group.cy = group.cy * scale + offsetY;
-  });
-}
-
-function spreadLargeGraphPositions(nodes, positions, groups) {
-  const groupMap = new Map(groups.map((group) => [group.family, group]));
-  for (const node of nodes) {
-    const point = positions.get(node.id);
-    const group = groupMap.get(node.family);
-    if (!point || !group || node.family === "repository") {
-      continue;
-    }
-    const rank = node.rankInGroup || 0;
-    const jitter = hashStringUnit(node.id);
-    const angle = rank * 2.399963229728653 + jitter * 0.9;
-    const familySpread =
-      node.family === "document" || node.family === "config"
-        ? 11.2
-        : node.family === "directory"
-          ? 12.4
-          : node.family === "code"
-            ? 9.8
-            : 8.1;
-    const shell = Math.pow(rank + 1, 0.42) * familySpread;
-    const lobe = 0.74 + hashStringUnit(`${node.id}:lobe`) * 0.62;
-    const skew = node.family === "code" ? 0.8 : 0.9;
-    point.x = group.cx + Math.cos(angle) * shell * lobe;
-    point.y = group.cy + Math.sin(angle) * shell * skew + (hashStringUnit(`${node.id}:ly`) - 0.5) * 10;
-    positions.set(node.id, point);
-  }
 }
 
 function graphViewportBounds(nodes) {
@@ -2388,9 +2492,14 @@ function graphVisibleNodes(scene, worldViewport) {
   return visible;
 }
 
-function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, height) {
-  const groupMap = new Map(groups.map((group) => [group.family, group]));
+function relaxGraphPositions(nodes, edges, positions, nodeMap, adjacency, components, width, height) {
   const nodeList = nodes.filter((node) => positions.has(node.id));
+  const componentByNodeId = new Map();
+  for (const component of components) {
+    for (const node of component.nodes) {
+      componentByNodeId.set(node.id, component);
+    }
+  }
   const iterations =
     nodeList.length > 4500 ? 10 : nodeList.length > 2500 ? 14 : nodeList.length > 1200 ? 22 : nodeList.length > 600 ? 38 : 62;
   const baseCellSize = nodeList.length > 2500 ? 84 : 72;
@@ -2427,15 +2536,9 @@ function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, he
             const dy = posA.y - posB.y;
             const distanceSq = dx * dx + dy * dy + 0.01;
             const distance = Math.sqrt(distanceSq);
-            const sameFamily = node.family === other.family;
-            const repulsionBase = sameFamily
-              ? node.family === "document" || node.family === "config"
-                ? 18800
-                : node.family === "directory"
-                  ? 12400
-                  : 9200
-              : 5200;
-            const repulsion = Math.min(repulsionBase / distanceSq, sameFamily ? 24 : 13);
+            const sameComponent = componentByNodeId.get(node.id) === componentByNodeId.get(other.id);
+            const repulsionBase = sameComponent ? 11800 : 4200;
+            const repulsion = Math.min(repulsionBase / distanceSq, sameComponent ? 19 : 9);
             const forceX = (dx / distance) * repulsion;
             const forceY = (dy / distance) * repulsion;
             displacements.get(node.id).x += forceX;
@@ -2458,37 +2561,24 @@ function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, he
       const dx = target.x - source.x;
       const dy = target.y - source.y;
       const distance = Math.sqrt(dx * dx + dy * dy) || 1;
-      const sameFamily = sourceNode.family === targetNode.family;
-      const touchesRepository = sourceNode.family === "repository" || targetNode.family === "repository";
-      const touchesDirectory = sourceNode.family === "directory" || targetNode.family === "directory";
       const relation = String(edge.label || "");
       const preferred =
         relation === "contains_dir"
-          ? touchesRepository
-            ? 198
-            : 148
+          ? 116
           : relation === "contains_file"
-            ? touchesDirectory
-              ? 102
-              : 132
-            : touchesRepository
-              ? 228
-              : sameFamily
-                ? sourceNode.family === "document" || sourceNode.family === "config"
-                  ? 142
-                  : 104
-                : 176;
+            ? 88
+            : sourceNode.family === "repository" || targetNode.family === "repository"
+              ? 136
+              : 108;
       const pull =
         (distance - preferred) *
         (relation === "contains_dir"
-          ? 0.006
+          ? 0.009
           : relation === "contains_file"
-            ? 0.0072
-            : touchesRepository
-              ? 0.0022
-              : sameFamily
-                ? 0.0058
-                : 0.0028);
+            ? 0.0105
+            : sourceNode.family === "repository" || targetNode.family === "repository"
+              ? 0.0042
+              : 0.0074);
       const forceX = (dx / distance) * pull;
       const forceY = (dy / distance) * pull;
       displacements.get(sourceNode.id).x += forceX;
@@ -2498,20 +2588,18 @@ function relaxGraphPositions(nodes, edges, positions, nodeMap, groups, width, he
     }
 
     for (const node of nodeList) {
-      const group = groupMap.get(node.family);
-      if (!group) continue;
+      const component = componentByNodeId.get(node.id);
+      if (!component) continue;
       const displacement = displacements.get(node.id);
       const point = positions.get(node.id);
-      const gravity =
-        node.family === "repository"
-          ? 0.03
-          : node.family === "directory"
-            ? 0.005
-          : node.family === "document" || node.family === "config"
-            ? 0.0032
-            : 0.008;
-      displacement.x += (group.cx - point.x) * gravity;
-      displacement.y += (group.cy - point.y) * gravity;
+      const gravity = node.family === "repository" ? 0.018 : 0.006;
+      displacement.x += (component.cx - point.x) * gravity;
+      displacement.y += (component.cy - point.y) * gravity;
+      const neighborCount = adjacency.get(node.id)?.size || 0;
+      if (!neighborCount) {
+        displacement.x += (component.cx - point.x) * 0.01;
+        displacement.y += (component.cy - point.y) * 0.01;
+      }
     }
 
     const temperature = 12 * (1 - iteration / iterations);
@@ -3139,6 +3227,20 @@ function graphFamilyColor(family) {
     other: "#79aac8",
   };
   return colors[family] || "#79aac8";
+}
+
+function graphNodeRenderPriority(node) {
+  const familyPriority = {
+    other: 0,
+    document: 1,
+    config: 2,
+    code: 3,
+    logic: 4,
+    entity: 5,
+    directory: 6,
+    repository: 7,
+  };
+  return (familyPriority[node.family] ?? 0) * 100000 + Math.min(node.degree || 0, 99999);
 }
 
 function escapeHtml(value) {
