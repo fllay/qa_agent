@@ -45,7 +45,7 @@ const GRAPH_LAYOUT_SEED_HEIGHT = 1680;
 const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
 const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
 const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
-const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light10";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light11";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -1378,7 +1378,7 @@ async function renderGraphStage(payload, graphModel) {
   const { points, links, cosmographConfig } = prepared;
   const pointIndexById = new Map(pointRows.map((point, index) => [point.id, index]));
   const zoomVisualStyleFor = (zoomLevel) => {
-    const pointSizeBase = smallGraphMode ? 0.78 : mediumGraphMode ? 0.94 : hugeGraphMode ? 1.92 : largeGraphMode ? 1.46 : 1;
+    const pointSizeBase = smallGraphMode ? 0.78 : mediumGraphMode ? 0.94 : hugeGraphMode ? 3.84 : largeGraphMode ? 2.92 : 1;
     const linkOpacityBase = smallGraphMode ? 0.78 : mediumGraphMode ? 0.64 : hugeGraphMode ? 0.38 : largeGraphMode ? 0.44 : 0.56;
     const linkWidthBase = smallGraphMode ? 0.96 : mediumGraphMode ? 0.88 : hugeGraphMode ? 0.62 : largeGraphMode ? 0.7 : 0.82;
     if (zoomLevel < 0.72) {
@@ -2046,10 +2046,10 @@ function buildGraphModel(payload) {
     const degree = Number(node.degree || 0);
     const radius = largeGraphMode
       ? Math.max(
-          family === "repository" ? 6.2 : 1.28,
+          family === "repository" ? 12.4 : 2.56,
           Math.min(
-            family === "repository" ? 12.8 : degree >= 12 ? 4.35 : 3.05,
-            (family === "repository" ? 6.9 + Math.sqrt(degree + 1) * 0.68 : 1.48 + Math.sqrt(degree + 1) * 0.28) *
+            family === "repository" ? 25.6 : degree >= 12 ? 8.7 : 6.1,
+            (family === "repository" ? 13.8 + Math.sqrt(degree + 1) * 1.36 : 2.96 + Math.sqrt(degree + 1) * 0.56) *
               layoutScale,
           ),
         )
