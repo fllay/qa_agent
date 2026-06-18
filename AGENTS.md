@@ -47,6 +47,9 @@
 - Removed node drag from the Cosmograph graph behavior while keeping the newer relation-first topology layout, removed the temporary drag settle hooks, and bumped the graph asset version to `20260618-graph-topology2`.
 - Retuned the graph viewer for clearer light-mode rendering by brightening the stage and modal surfaces, increasing link/node contrast in the Cosmograph config, darkening secondary graph text, and bumping the frontend asset version to `20260618-graph-light1`.
 - Fixed graph layer ordering so important nodes render above less important ones by sorting the Cosmograph point input from low-priority nodes to high-priority repository/directory/high-degree nodes before draw, and bumped the frontend asset version to `20260618-graph-light2`.
+- Removed the remaining Cosmograph node-size zoom skew by flattening the active viewer's global `pointSizeScale` to `1` while keeping `scalePointsOnZoom: false`, so node radii stay visually stable across zoom levels; bumped the frontend asset version to `20260618-graph-light3`.
+- Removed the last pre-render node-size ratio in the active Cosmograph viewer by passing raw `node.radius` values straight through as direct pixel sizes instead of inflating them again by `small/medium/huge` graph-size multipliers; bumped the frontend asset version to `20260618-graph-light4`.
+- Cleared the `git pull` blocker on `192.168.168.98:/home/user/qa_agent` by stashing the server's older uncommitted `chat.html`/`chat.js` frontend edits under `codex-server-pre-pull-2026-06-18`, fast-forwarding `main` from `57adbad` to `5fe1b54`, and confirming the remote worktree is clean afterward.
 
 ## 2026-06-16
 

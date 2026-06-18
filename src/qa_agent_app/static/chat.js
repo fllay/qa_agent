@@ -45,7 +45,7 @@ const GRAPH_LAYOUT_SEED_HEIGHT = 1680;
 const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
 const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
 const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
-const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light2";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light4";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -1298,34 +1298,7 @@ async function renderGraphStage(payload, graphModel) {
     color: node.color,
     x: Number((node.x || 0).toFixed(3)),
     y: Number((node.y || 0).toFixed(3)),
-    size: Number(
-      (
-        node.radius *
-        (node.family === "repository"
-          ? smallGraphMode
-            ? 2.1
-            : mediumGraphMode
-              ? 2.78
-              : hugeGraphMode
-                ? 3.15
-                : 3.38
-          : node.family === "directory"
-            ? smallGraphMode
-              ? 2.08
-              : mediumGraphMode
-                ? 2.5
-                : hugeGraphMode
-                  ? 2.72
-                  : 2.86
-          : smallGraphMode
-            ? 2.34
-            : mediumGraphMode
-              ? 3.0
-              : hugeGraphMode
-                ? 3.5
-                : 3.74)
-      ).toFixed(3),
-    ),
+    size: Number(node.radius.toFixed(3)),
     family: node.familyLabel,
     degree: node.degree,
   }));
@@ -1416,7 +1389,7 @@ async function renderGraphStage(payload, graphModel) {
     ...cosmographConfig,
     backgroundColor: "#f4f7fb",
     pointOpacity: 0.97,
-    pointSizeScale: smallGraphMode ? 0.92 : mediumGraphMode ? 1.08 : hugeGraphMode ? 1.16 : 1.22,
+    pointSizeScale: 1,
     pointSamplingDistance: 2,
     pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
     scalePointsOnZoom: false,
