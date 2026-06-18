@@ -45,7 +45,7 @@ const GRAPH_LAYOUT_SEED_HEIGHT = 1680;
 const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
 const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
 const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
-const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light12";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light13";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -2046,10 +2046,10 @@ function buildGraphModel(payload) {
     const degree = Number(node.degree || 0);
     const radius = largeGraphMode
       ? Math.max(
-          family === "repository" ? 9.3 : 1.92,
+          family === "repository" ? 7.2 : 2.1,
           Math.min(
-            family === "repository" ? 19.2 : degree >= 12 ? 6.5 : 4.58,
-            (family === "repository" ? 10.35 + Math.sqrt(degree + 1) * 1.02 : 2.22 + Math.sqrt(degree + 1) * 0.42) *
+            family === "repository" ? 12.4 : degree >= 12 ? 5.7 : 4.1,
+            (family === "repository" ? 8.2 + Math.sqrt(degree + 1) * 0.78 : 2.4 + Math.sqrt(degree + 1) * 0.46) *
               layoutScale,
           ),
         )
