@@ -45,7 +45,7 @@ const GRAPH_LAYOUT_SEED_HEIGHT = 1680;
 const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
 const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
 const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
-const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light13";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light14";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -1469,17 +1469,17 @@ async function renderGraphStage(payload, graphModel) {
       hoveredPointRingColor: GRAPH_NODE_OUTLINE_HOVER_COLOR,
       focusedPointRingColor: GRAPH_MAIN_NODE_OUTLINE_COLOR,
       fitViewOnInit: true,
-      fitViewPadding: 0.08,
+      fitViewPadding: largeGraphMode ? 0.04 : 0.08,
       fitViewDuration: 250,
-      simulationRepulsion: largeGraphMode ? 2.05 : mediumGraphMode ? 1.38 : 1.16,
-      simulationLinkDistance: largeGraphMode ? 24 : mediumGraphMode ? 16 : 12,
+      simulationRepulsion: largeGraphMode ? 2.52 : mediumGraphMode ? 1.38 : 1.16,
+      simulationLinkDistance: largeGraphMode ? 30 : mediumGraphMode ? 16 : 12,
       simulationLinkSpring: largeGraphMode ? 0.32 : mediumGraphMode ? 0.58 : 0.82,
       simulationGravity: largeGraphMode ? 0.018 : mediumGraphMode ? 0.08 : 0.18,
       simulationCenter: largeGraphMode ? 0.022 : mediumGraphMode ? 0.045 : 0.08,
       simulationDecay: largeGraphMode ? 1200 : mediumGraphMode ? 1700 : 2400,
       enableSimulationDuringZoom: false,
       enableDrag: false,
-      spaceSize: hugeGraphMode ? 16384 : largeGraphMode ? 12288 : 8192,
+      spaceSize: hugeGraphMode ? 22528 : largeGraphMode ? 16384 : 8192,
       randomSeed: payload.topic_name,
       showTopLabels: true,
       showTopLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 10 : 20,
@@ -2046,10 +2046,10 @@ function buildGraphModel(payload) {
     const degree = Number(node.degree || 0);
     const radius = largeGraphMode
       ? Math.max(
-          family === "repository" ? 7.2 : 2.1,
+          family === "repository" ? 6.2 : 1.9,
           Math.min(
-            family === "repository" ? 12.4 : degree >= 12 ? 5.7 : 4.1,
-            (family === "repository" ? 8.2 + Math.sqrt(degree + 1) * 0.78 : 2.4 + Math.sqrt(degree + 1) * 0.46) *
+            family === "repository" ? 10.6 : degree >= 12 ? 5.2 : 3.9,
+            (family === "repository" ? 7.2 + Math.sqrt(degree + 1) * 0.64 : 2.25 + Math.sqrt(degree + 1) * 0.4) *
               layoutScale,
           ),
         )
