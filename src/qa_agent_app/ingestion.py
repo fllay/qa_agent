@@ -337,9 +337,13 @@ class IngestionService:
         try:
             return self.graphify.build_graph(topic_dir, source_dir)
         except GraphifyError as exc:
-            if "Graphify completed but produced an empty graph" in str(exc):
+            error_text = str(exc)
+            if (
+                "Graphify completed but produced an empty graph" in error_text
+                or "Graphify timed out after" in error_text
+            ):
                 return build_fallback_graph(topic_dir, source_dir)
-            diagnosis = self._diagnose_empty_graph_source(source_dir, str(exc))
+            diagnosis = self._diagnose_empty_graph_source(source_dir, error_text)
             if diagnosis:
                 raise RuntimeError(diagnosis) from exc
             raise

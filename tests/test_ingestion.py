@@ -37,6 +37,14 @@ class EmptyGraphGraphifyClient:
         )
 
 
+class TimeoutGraphifyClient:
+    def ensure_available(self) -> None:
+        return None
+
+    def build_graph(self, topic_dir: Path, source_dir: Path) -> Path:
+        raise GraphifyError("Graphify timed out after 1800 seconds.")
+
+
 def test_ingestion_appends_sources(tmp_path):
     store = TopicStore(tmp_path / "qa.sqlite")
     topic = store.create_topic(TopicCreate(name="Docs"))
@@ -125,6 +133,22 @@ def test_empty_graph_uses_fallback_graph(tmp_path):
     store = TopicStore(tmp_path / "qa.sqlite")
     topic = store.create_topic(TopicCreate(name="Docs"))
     service = IngestionService(tmp_path / "topics", store, EmptyGraphGraphifyClient(), DummyGitHubCollector())
+
+    repo_dir = tmp_path / "topics" / topic.id / "source" / "repo"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "README.md").write_text("# Demo Repo\n\nRepository overview", encoding="utf-8")
+    (repo_dir / "main.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+
+    graph_path = service._build_graph_with_diagnostics(tmp_path / "topics" / topic.id, tmp_path / "topics" / topic.id / "source")
+
+    assert graph_path.name == "fallback-graph.json"
+    assert graph_path.exists()
+
+
+def test_graphify_timeout_uses_fallback_graph(tmp_path):
+    store = TopicStore(tmp_path / "qa.sqlite")
+    topic = store.create_topic(TopicCreate(name="Docs"))
+    service = IngestionService(tmp_path / "topics", store, TimeoutGraphifyClient(), DummyGitHubCollector())
 
     repo_dir = tmp_path / "topics" / topic.id / "source" / "repo"
     repo_dir.mkdir(parents=True)

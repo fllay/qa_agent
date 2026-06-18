@@ -14,6 +14,7 @@
 
 ## 2026-06-15
 
+- Added a fallback-graph cleanup pass for large-repo timeout recovery by excluding generated and dependency directories such as `graphify-out`, `graphify`, `node_modules`, and virtualenv caches from local fallback graph construction, preventing Graphify cache artifacts from showing up as fake repository content in `srsran/srsRAN_Project -> ocudu` indexing results.
 - Investigated the server-side graph popup failure on `192.168.168.98` and confirmed the deployed topic graph API was returning HTTP `200` with a very large Graphify payload (`63817` nodes, `195801` edges), so the browser bottleneck was client-side graph layout/render cost rather than graph loading.
 - Kept full Graphify graph payloads enabled in the backend and reworked the graph viewer's large-graph render path to avoid the most expensive force-relaxation and overlap-separation passes for very large graphs, fit the initial viewport to full graph bounds, and cull off-screen nodes plus many off-screen/low-zoom edges during canvas redraws.
 - Added a cache-busting `chat.js`/`chat.css` version bump for the updated full-graph viewer and redeployed the Dockerized app on `192.168.168.98`, rebuilding the `qa_agent-qa-agent` image and restarting `qa_agent-qa-agent-1` with the full graph payload path still active.
@@ -41,6 +42,7 @@
 - Rebalanced the Cosmograph size ratios again so small graphs render with noticeably tighter node radii, while medium/large graphs keep readable nodes but taper link widths and link opacity down as total node count climbs, preventing dense large graphs from being dominated by heavy lines.
 - Diagnosed the latest Docker complaint as a startup bottleneck rather than a Dockerfile compile failure: the image built cleanly, but `docker-entrypoint.sh` was recursively `chown`ing the entire bind-mounted `data/` tree on every start, which is expensive with the current `~65k` filesystem entries; changed the entrypoint to perform the recursive ownership repair once by default using a marker file, with `QA_AGENT_FORCE_RECURSIVE_CHOWN=1` available for an explicit full re-run.
 - Increased Graphify timeout handling for large ingests by raising the base default from `900` to `1800` seconds in app and Docker defaults, and made `GraphifyClient` scale its effective timeout up to `3600` or `7200` seconds automatically for large source trees based on file-count and on-disk-size thresholds, so big repositories are less likely to fail on the initial graph build.
+- Hardened ingestion for large repositories such as `srsran/srsRAN_Project -> ocudu` by treating Graphify timeouts like empty-graph outcomes: the app now falls back to the local repository graph builder instead of leaving the topic in a hard error state, and regression coverage was added for the timeout-to-fallback path.
 
 ## 2026-06-08
 

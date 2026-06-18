@@ -51,13 +51,26 @@ HIGH_SIGNAL_NAMES = {
     "docker-compose.yml",
 }
 
+IGNORED_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".graphify",
+    "graphify",
+    "graphify-out",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+}
+
 
 def build_fallback_graph(topic_dir: Path, source_dir: Path) -> Path:
     topic_dir.mkdir(parents=True, exist_ok=True)
     nodes: list[dict] = []
     edges: list[dict] = []
 
-    repo_dirs = [path for path in source_dir.iterdir() if path.is_dir()]
+    repo_dirs = [path for path in source_dir.iterdir() if path.is_dir() and not _is_ignored_path(path)]
     for repo_dir in sorted(repo_dirs):
         repo_node_id = f"repo::{repo_dir.name}"
         repo_summary = _repo_summary(repo_dir)
@@ -101,7 +114,7 @@ def _select_files(repo_dir: Path) -> list[Path]:
     for path in repo_dir.rglob("*"):
         if not path.is_file():
             continue
-        if any(part.startswith(".git") for part in path.parts):
+        if _is_ignored_path(path):
             continue
         if path.suffix.lower() not in TEXT_EXTENSIONS and path.name.lower() not in HIGH_SIGNAL_NAMES:
             continue
@@ -129,10 +142,11 @@ def _repo_summary(repo_dir: Path) -> str:
     signal_files: list[str] = []
     readme_text = ""
     for path in repo_dir.rglob("*"):
-        if path.is_file():
-            file_count += 1
-            if len(signal_files) < 8 and (path.name.lower() in HIGH_SIGNAL_NAMES or path.suffix.lower() in {".md", ".cpp", ".h", ".py"}):
-                signal_files.append(path.relative_to(repo_dir).as_posix())
+        if _is_ignored_path(path) or not path.is_file():
+            continue
+        file_count += 1
+        if len(signal_files) < 8 and (path.name.lower() in HIGH_SIGNAL_NAMES or path.suffix.lower() in {".md", ".cpp", ".h", ".py"}):
+            signal_files.append(path.relative_to(repo_dir).as_posix())
     for candidate in [*repo_dir.glob("README*"), repo_dir / "_github" / "repository.md"]:
         if candidate.exists():
             readme_text = _read_snippet(candidate, max_chars=900)
@@ -160,3 +174,7 @@ def _file_type(path: Path) -> str:
     if suffix in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf"}:
         return "config"
     return "code"
+
+
+def _is_ignored_path(path: Path) -> bool:
+    return any(part in IGNORED_DIR_NAMES for part in path.parts)
