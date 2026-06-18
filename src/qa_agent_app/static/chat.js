@@ -45,7 +45,7 @@ const GRAPH_LAYOUT_SEED_HEIGHT = 1680;
 const GRAPH_NODE_OUTLINE_COLOR = "rgba(132, 149, 178, 0.44)";
 const GRAPH_NODE_OUTLINE_HOVER_COLOR = "rgba(226, 232, 240, 0.94)";
 const GRAPH_MAIN_NODE_OUTLINE_COLOR = "rgba(183, 198, 255, 0.78)";
-const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light4";
+const COSMOGRAPH_MODULE_URL = "/static/vendor/cosmograph-bundle.js?v=20260618-graph-light9";
 const expandedTopics = new Set();
 const threadSessions = new Map();
 
@@ -1377,90 +1377,168 @@ async function renderGraphStage(payload, graphModel) {
 
   const { points, links, cosmographConfig } = prepared;
   const pointIndexById = new Map(pointRows.map((point, index) => [point.id, index]));
+  const zoomVisualStyleFor = (zoomLevel) => {
+    const pointSizeBase = smallGraphMode ? 0.78 : mediumGraphMode ? 0.94 : hugeGraphMode ? 1.3 : largeGraphMode ? 1.16 : 1;
+    const linkOpacityBase = smallGraphMode ? 0.78 : mediumGraphMode ? 0.64 : hugeGraphMode ? 0.38 : largeGraphMode ? 0.44 : 0.56;
+    const linkWidthBase = smallGraphMode ? 0.96 : mediumGraphMode ? 0.88 : hugeGraphMode ? 0.62 : largeGraphMode ? 0.7 : 0.82;
+    if (zoomLevel < 0.72) {
+      return {
+        band: "overview",
+        pointSizeScale: Number((pointSizeBase * 0.96).toFixed(3)),
+        linkOpacity: Number((linkOpacityBase * 0.78).toFixed(3)),
+        linkWidthScale: Number((linkWidthBase * 0.88).toFixed(3)),
+        linkVisibilityDistanceRange: smallGraphMode ? [48, 156] : mediumGraphMode ? [36, 128] : [20, 92],
+        linkVisibilityMinTransparency: smallGraphMode ? 0.5 : mediumGraphMode ? 0.64 : 0.86,
+        hoveredLinkWidthIncrease: smallGraphMode ? 1.4 : mediumGraphMode ? 1.22 : 1.05,
+      };
+    }
+    if (zoomLevel < 1.18) {
+      return {
+        band: "inspect",
+        pointSizeScale: Number((pointSizeBase * 1.18).toFixed(3)),
+        linkOpacity: Number((linkOpacityBase * 0.98).toFixed(3)),
+        linkWidthScale: Number((linkWidthBase * 0.78).toFixed(3)),
+        linkVisibilityDistanceRange: smallGraphMode ? [56, 168] : mediumGraphMode ? [46, 144] : [28, 112],
+        linkVisibilityMinTransparency: smallGraphMode ? 0.44 : mediumGraphMode ? 0.56 : 0.8,
+        hoveredLinkWidthIncrease: smallGraphMode ? 1.55 : mediumGraphMode ? 1.3 : 1.1,
+      };
+    }
+    if (zoomLevel < 1.9) {
+      return {
+        band: "detail",
+        pointSizeScale: Number((pointSizeBase * 1.42).toFixed(3)),
+        linkOpacity: Number((linkOpacityBase * 1.12).toFixed(3)),
+        linkWidthScale: Number((linkWidthBase * 0.68).toFixed(3)),
+        linkVisibilityDistanceRange: smallGraphMode ? [64, 184] : mediumGraphMode ? [54, 156] : [36, 132],
+        linkVisibilityMinTransparency: smallGraphMode ? 0.38 : mediumGraphMode ? 0.48 : 0.72,
+        hoveredLinkWidthIncrease: smallGraphMode ? 1.72 : mediumGraphMode ? 1.42 : 1.18,
+      };
+    }
+    return {
+      band: "focus",
+      pointSizeScale: Number((pointSizeBase * 1.62).toFixed(3)),
+      linkOpacity: Number((linkOpacityBase * 1.22).toFixed(3)),
+      linkWidthScale: Number((linkWidthBase * 0.62).toFixed(3)),
+      linkVisibilityDistanceRange: smallGraphMode ? [72, 196] : mediumGraphMode ? [60, 168] : [42, 148],
+      linkVisibilityMinTransparency: smallGraphMode ? 0.32 : mediumGraphMode ? 0.42 : 0.64,
+      hoveredLinkWidthIncrease: smallGraphMode ? 1.86 : mediumGraphMode ? 1.56 : 1.24,
+    };
+  };
+  const applyZoomVisualStyle = (zoomLevel, force = false) => {
+    if (!activeCosmograph || !activeGraphScene) {
+      return;
+    }
+    const style = zoomVisualStyleFor(Math.max(zoomLevel || 1, 0.12));
+    if (!force && activeGraphScene.zoomVisualBand === style.band) {
+      return;
+    }
+    activeGraphScene.zoomVisualBand = style.band;
+    activeCosmograph.setConfig({
+      points: activeGraphScene.points,
+      links: activeGraphScene.links,
+      ...activeGraphScene.baseCosmographConfig,
+      pointSizeScale: style.pointSizeScale,
+      linkOpacity: style.linkOpacity,
+      linkWidthScale: style.linkWidthScale,
+      linkVisibilityDistanceRange: style.linkVisibilityDistanceRange,
+      linkVisibilityMinTransparency: style.linkVisibilityMinTransparency,
+      hoveredLinkWidthIncrease: style.hoveredLinkWidthIncrease,
+    });
+  };
+  const initialZoomVisualStyle = zoomVisualStyleFor(1);
   activeGraphScene = {
     totalNodes: graphModel.totalNodes,
     totalEdges: linkRows.length,
     mainNodeIds: new Set(mainNodeIds),
     selectedPointIndex: null,
+    zoomVisualBand: initialZoomVisualStyle.band,
+    points,
+    links,
+    baseCosmographConfig: {
+      ...cosmographConfig,
+      backgroundColor: "#f4f7fb",
+      pointOpacity: 0.97,
+      pointSamplingDistance: 2,
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
+      scalePointsOnZoom: false,
+      renderLinks: true,
+      scaleLinksOnZoom: false,
+      pointGreyoutOpacity: 0.16,
+      linkGreyoutOpacity: 0.12,
+      renderHoveredPointRing: true,
+      hoveredPointRingColor: GRAPH_NODE_OUTLINE_HOVER_COLOR,
+      focusedPointRingColor: GRAPH_MAIN_NODE_OUTLINE_COLOR,
+      fitViewOnInit: true,
+      fitViewPadding: 0.08,
+      fitViewDuration: 250,
+      simulationRepulsion: largeGraphMode ? 2.05 : mediumGraphMode ? 1.38 : 1.16,
+      simulationLinkDistance: largeGraphMode ? 24 : mediumGraphMode ? 16 : 12,
+      simulationLinkSpring: largeGraphMode ? 0.32 : mediumGraphMode ? 0.58 : 0.82,
+      simulationGravity: largeGraphMode ? 0.018 : mediumGraphMode ? 0.08 : 0.18,
+      simulationCenter: largeGraphMode ? 0.022 : mediumGraphMode ? 0.045 : 0.08,
+      simulationDecay: largeGraphMode ? 1200 : mediumGraphMode ? 1700 : 2400,
+      enableSimulationDuringZoom: false,
+      enableDrag: false,
+      spaceSize: hugeGraphMode ? 16384 : largeGraphMode ? 12288 : 8192,
+      randomSeed: payload.topic_name,
+      showTopLabels: true,
+      showTopLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 10 : 20,
+      showDynamicLabels: true,
+      showDynamicLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 6 : 14,
+      showLabelsFor: mainNodeIds,
+      showHoveredPointLabel: true,
+      showFocusedPointLabel: true,
+      showUnselectedPointLabels: false,
+      showSelectedLabels: true,
+      selectedPointLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 18 : 26,
+      onGraphRebuilt: () => {
+        if (activeGraphSettleTimer) {
+          window.clearTimeout(activeGraphSettleTimer);
+        }
+        activeGraphSettleTimer = window.setTimeout(() => {
+          activeGraphSettleTimer = null;
+          const pinnedIndices = mainNodeIds
+            .map((id) => pointIndexById.get(id))
+            .filter((index) => Number.isInteger(index));
+          if (pinnedIndices.length) {
+            activeCosmograph?.setPinnedPoints?.(pinnedIndices);
+          }
+          activeCosmograph?.stop?.();
+        }, largeGraphMode ? 420 : mediumGraphMode ? 520 : 680);
+      },
+      onZoomEnd: () => {
+        applyZoomVisualStyle(activeCosmograph?.getZoomLevel?.() || 1);
+      },
+      onPointClick: (index) => {
+        if (activeGraphScene?.selectedPointIndex === index) {
+          activeGraphScene.selectedPointIndex = null;
+          activeCosmograph?.unselectAllPoints?.();
+          activeCosmograph?.setFocusedPoint?.();
+          return;
+        }
+        activeGraphScene.selectedPointIndex = index;
+        activeCosmograph?.unselectAllPoints?.();
+        activeCosmograph?.selectPoint?.(index, false, true);
+        activeCosmograph?.setFocusedPoint?.(index);
+        activeCosmograph?.zoomToPoint(
+          index,
+          220,
+          Math.max(activeCosmograph?.getZoomLevel?.() || 1, largeGraphMode ? 1.42 : mediumGraphMode ? 1.28 : 1.44),
+          true,
+        );
+      },
+    },
   };
   activeCosmograph = new Cosmograph(host, {
     points,
     links,
-    ...cosmographConfig,
-    backgroundColor: "#f4f7fb",
-    pointOpacity: 0.97,
-    pointSizeScale: 1,
-    pointSamplingDistance: 2,
-    pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
-    scalePointsOnZoom: false,
-    renderLinks: true,
-    linkOpacity: largeGraphMode ? 0.82 : 0.84,
-    linkWidthScale: 1,
-    scaleLinksOnZoom: false,
-    linkVisibilityDistanceRange: largeGraphMode ? [32, 132] : [64, 184],
-    linkVisibilityMinTransparency: largeGraphMode ? 0.72 : 0.42,
-    hoveredLinkWidthIncrease: largeGraphMode ? 1.2 : 2.2,
-    pointGreyoutOpacity: 0.16,
-    linkGreyoutOpacity: 0.12,
-    renderHoveredPointRing: true,
-    hoveredPointRingColor: GRAPH_NODE_OUTLINE_HOVER_COLOR,
-    focusedPointRingColor: GRAPH_MAIN_NODE_OUTLINE_COLOR,
-    fitViewOnInit: true,
-    fitViewPadding: 0.08,
-    fitViewDuration: 250,
-    simulationRepulsion: largeGraphMode ? 2.05 : mediumGraphMode ? 1.38 : 1.16,
-    simulationLinkDistance: largeGraphMode ? 24 : mediumGraphMode ? 16 : 12,
-    simulationLinkSpring: largeGraphMode ? 0.32 : mediumGraphMode ? 0.58 : 0.82,
-    simulationGravity: largeGraphMode ? 0.018 : mediumGraphMode ? 0.08 : 0.18,
-    simulationCenter: largeGraphMode ? 0.022 : mediumGraphMode ? 0.045 : 0.08,
-    simulationDecay: largeGraphMode ? 1200 : mediumGraphMode ? 1700 : 2400,
-    enableSimulationDuringZoom: false,
-    enableDrag: false,
-    spaceSize: hugeGraphMode ? 16384 : largeGraphMode ? 12288 : 8192,
-    randomSeed: payload.topic_name,
-    showTopLabels: true,
-    showTopLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 10 : 20,
-    showDynamicLabels: true,
-    showDynamicLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 6 : 14,
-    showLabelsFor: mainNodeIds,
-    showHoveredPointLabel: true,
-    showFocusedPointLabel: true,
-    showUnselectedPointLabels: false,
-    showSelectedLabels: true,
-    selectedPointLabelsLimit: graphModel.totalNodes >= LARGE_GRAPH_LAYOUT_THRESHOLD ? 18 : 26,
-    onGraphRebuilt: () => {
-      if (activeGraphSettleTimer) {
-        window.clearTimeout(activeGraphSettleTimer);
-      }
-      activeGraphSettleTimer = window.setTimeout(() => {
-        activeGraphSettleTimer = null;
-        const pinnedIndices = mainNodeIds
-          .map((id) => pointIndexById.get(id))
-          .filter((index) => Number.isInteger(index));
-        if (pinnedIndices.length) {
-          activeCosmograph?.setPinnedPoints?.(pinnedIndices);
-        }
-        activeCosmograph?.stop?.();
-      }, largeGraphMode ? 420 : mediumGraphMode ? 520 : 680);
-    },
-    onPointClick: (index) => {
-      if (activeGraphScene?.selectedPointIndex === index) {
-        activeGraphScene.selectedPointIndex = null;
-        activeCosmograph?.unselectAllPoints?.();
-        activeCosmograph?.setFocusedPoint?.();
-        return;
-      }
-      activeGraphScene.selectedPointIndex = index;
-      activeCosmograph?.unselectAllPoints?.();
-      activeCosmograph?.selectPoint?.(index, false, true);
-      activeCosmograph?.setFocusedPoint?.(index);
-      activeCosmograph?.zoomToPoint(
-        index,
-        220,
-        Math.max(activeCosmograph?.getZoomLevel?.() || 1, largeGraphMode ? 1.16 : mediumGraphMode ? 1.28 : 1.44),
-        true,
-      );
-    },
+    ...activeGraphScene.baseCosmographConfig,
+    pointSizeScale: initialZoomVisualStyle.pointSizeScale,
+    linkOpacity: initialZoomVisualStyle.linkOpacity,
+    linkWidthScale: initialZoomVisualStyle.linkWidthScale,
+    linkVisibilityDistanceRange: initialZoomVisualStyle.linkVisibilityDistanceRange,
+    linkVisibilityMinTransparency: initialZoomVisualStyle.linkVisibilityMinTransparency,
+    hoveredLinkWidthIncrease: initialZoomVisualStyle.hoveredLinkWidthIncrease,
   });
 
   els.graphStage.querySelectorAll("[data-graph-zoom]").forEach((button) => {
@@ -3190,16 +3268,16 @@ function graphFamilyLabel(family) {
 
 function graphFamilyColor(family) {
   const colors = {
-    repository: "#c8d0f4",
-    directory: "#94a3b8",
-    config: "#95a4c0",
-    document: "#e0af68",
-    entity: "#bb9af7",
-    logic: "#f0c38a",
-    code: "#7dcfff",
-    other: "#79aac8",
+    repository: "#8b9cf6",
+    directory: "#64748b",
+    config: "#14b8a6",
+    document: "#d97706",
+    entity: "#a855f7",
+    logic: "#f59e0b",
+    code: "#38bdf8",
+    other: "#0ea5a4",
   };
-  return colors[family] || "#79aac8";
+  return colors[family] || "#0ea5a4";
 }
 
 function graphNodeRenderPriority(node) {
